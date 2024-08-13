@@ -1,0 +1,15 @@
+[project]
+name = "erechtheus"
+version = "0.1.0"
+description = "erechtheus"
+readme = "README.md"
+requires-python = ">=3.8, <4.0"
+
+[tool.nonebot]
+adapters = [
+    { name = "OneBot V11", module_name = "nonebot.adapters.onebot.v11" },
+    {name = "Console", module_name = "nonebot.adapters.console"}
+]
+plugins = ["nonebot_plugin_maimaidx", "nonebot_plugin_workscore", "nonebot_plugin_acc_calculate", "nonebot_plugin_exchangerate", "nonebot_plugin_maimai", "nonebot_plugin_status", "nonebot_plugin_apscheduler", "nonebot_plugin_picsearcher", "nonebot_plugin_translator", "nonebot_plugin_abbrreply", "nonebot_plugin_help", "nonebot_plugin_alias", "nonebot_plugin_autohelp", "nonebot_plugin_repeater"]
+plugin_dirs = []
+builtin_plugins = ["echo"]
