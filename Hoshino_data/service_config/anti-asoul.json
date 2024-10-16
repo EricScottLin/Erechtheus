@@ -1,0 +1,13 @@
+{
+  "name": "anti-asoul",
+  "use_priv": 1,
+  "manage_priv": 21,
+  "enable_on_default": false,
+  "visible": true,
+  "enable_group": [
+    306256168
+  ],
+  "disable_group": [
+
+  ]
+}

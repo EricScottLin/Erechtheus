@@ -1,0 +1,14 @@
+{
+  "name": "maimaiDX",
+  "use_priv": 1,
+  "manage_priv": 21,
+  "enable_on_default": true,
+  "visible": true,
+  "enable_group": [
+
+  ],
+  "disable_group": [
+    306256168,
+    984616276
+  ]
+}

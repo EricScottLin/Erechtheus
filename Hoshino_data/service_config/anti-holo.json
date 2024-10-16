@@ -1,0 +1,13 @@
+{
+  "name": "anti-holo",
+  "use_priv": 1,
+  "manage_priv": 999,
+  "enable_on_default": true,
+  "visible": true,
+  "enable_group": [
+
+  ],
+  "disable_group": [
+    306256168
+  ]
+}
