@@ -1,5 +1,7 @@
 import json
+import os
 import time
+
 import traceback
 from typing import Dict, List, Optional, Union
 
@@ -9,6 +11,8 @@ from pydantic import BaseModel
 from .. import arcades_json, loga
 from .maimaidx_music import writefile
 
+os.environ['TZ'] = 'Asia/Shanghai'
+time.tzset()
 
 class Arcade(BaseModel):
     
@@ -111,6 +115,8 @@ class ArcadeList(List[Arcade]):
                 msg += f'    - 平均 {arcade.person / arcade.num:.2f} 人\n'
             if arcade.by:
                 msg += f'    - 由 {arcade.by} 更新于 {arcade.time}'
+            else:
+                msg += f'    - 由 某位路过的好心人 更新于 {arcade.time}'
             result.append(msg.strip())
         return result
 
