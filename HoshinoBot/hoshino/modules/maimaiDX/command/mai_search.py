@@ -199,7 +199,8 @@ async def _(bot: NoneBot, ev: CQEvent):
                 msg += f'※ 可以使用指令「同意别名 {_s["Tag"]}」进行投票'
                 await bot.finish(ev, msg.strip(), at_sender=True)
             else:
-                alias_data = [Alias(**_a) for _a in obj]
+                # 确保 obj 中的每个元素都是字典
+                alias_data = [Alias(**_a) for _a in obj if isinstance(_a, dict)]
     if alias_data:
         if len(alias_data) != 1:
             msg = f'找到{len(alias_data)}个相同别名的曲目：\n'
@@ -218,7 +219,7 @@ async def _(bot: NoneBot, ev: CQEvent):
     if name.isdigit() and (music := mai.total_list.by_id(name)):
         await bot.finish(ev, '您要找的是不是：' + (await draw_music_info(music, ev.user_id)), at_sender=True)
     if search_id := re.search(r'^id([0-9]*)$', name, re.IGNORECASE):
-        music = music = mai.total_list.by_id(search_id.group(1))
+        music = mai.total_list.by_id(search_id.group(1))
         await bot.finish(ev, '您要找的是不是：' + (await draw_music_info(music, ev.user_id)), at_sender=True)
     # 标题
     result = mai.total_list.filter(title_search=name)

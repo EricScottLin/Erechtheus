@@ -3,7 +3,7 @@ from datetime import timedelta
 from hoshino import Service, priv, util
 from hoshino.typing import CQEvent, CQHttpError, MessageSegment as ms
 
-sv = Service('anti-kfc', enable_on_default=True)
+sv = Service('anti-kdj', enable_on_default=False)
 
 CRAZY_THURSDAY_ALIAS = list(map(''.join, itertools.product(('疯狂', '狂乱'), ('星期四', '木曜日', '星期寺'))))
 THURSDAY_ALIAS = ['⭐期四', '⭐期4']
@@ -19,26 +19,24 @@ KFC_ALIAS = [
     'kfc', '肯德基', '肯德鸡', '肯德🐓', '肯德🐔'
 ]
 
-@sv.on_keyword(
-    KFC_ALIAS,
-    *CRAZY_THURSDAY_ALIAS,
-    *THURSDAY_ALIAS)
-async def anti_kfc_crazy_thursday(bot, ev: CQEvent):
-    priv.set_block_user(ev.user_id, timedelta(seconds=240))
-    await util.silence(ev, 4 * 60, skip_su=False)
-    await bot.send(ev, f'{ms.at(ev.user_id)} 本群正在对美实施经济制裁，本周不参加疯狂星期四！')
-    try:
-        await bot.delete_msg(self_id=ev.self_id, message_id=ev.message_id)
-    except CQHttpError:
-        pass
+all_aliases = KFC_ALIAS + CRAZY_THURSDAY_ALIAS + THURSDAY_ALIAS
 
+@sv.on_keyword(all_aliases)
+async def anti_kfc_crazy_thursday(bot, ev: CQEvent):
+    try:
+        priv.set_block_user(ev.user_id, timedelta(seconds=240))
+        await util.silence(ev, 4 * 60, skip_su=False)
+        await bot.send(ev, f'{ms.at(ev.user_id)} 本群正在对美实施经济制裁，本周不参加疯狂星期四！')
+        await bot.delete_msg(self_id=ev.self_id, message_id=ev.message_id)
+    except CQHttpError as e:
+        print(f"Error deleting message: {e}")
 
 @sv.on_keyword(*VME50_ALIAS)
 async def anti_vme50(bot, ev: CQEvent):
-    priv.set_block_user(ev.user_id, timedelta(seconds=240))
-    await util.silence(ev, 4 * 60, skip_su=False)
-    await bot.send(ev, f'{ms.at(ev.user_id)} 反诈中心ESL分部提醒您：以疯狂星期四等名义向您索要钱财的均为诈骗！')
-    # try:
-    #     await bot.delete_msg(self_id=ev.self_id, message_id=ev.message_id)
-    # except CQHttpError:
-    #     pass
+    try:
+        priv.set_block_user(ev.user_id, timedelta(seconds=60))
+        await util.silence(ev, 4 * 60, skip_su=False)
+        await bot.send(ev, f'{ms.at(ev.user_id)} 反诈中心ESL分部提醒您：以疯狂星期四等名义向您索要钱财的均为诈骗！')
+        await bot.delete_msg(self_id=ev.self_id, message_id=ev.message_id)
+    except CQHttpError as e:
+        print(f"Error deleting message: {e}")

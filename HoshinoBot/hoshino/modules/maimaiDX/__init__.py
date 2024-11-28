@@ -26,7 +26,7 @@ if not arcades_json.exists():
     arcades_json.write_text("[]")
 
 config_json: Path = static / 'config.json'                      # token
-alias_file: Path = static / 'music_alias.json_bk'                  # 别名暂存文件
+alias_file: Path = static / 'music_alias.json'                  # 别名暂存文件
 local_alias_file: Path = static / 'local_music_alias.json'      # 本地别名文件
 music_file: Path = static / 'music_data.json'                   # 曲目暂存文件
 chart_file: Path = static / 'music_chart.json'                  # 谱面数据暂存文件
