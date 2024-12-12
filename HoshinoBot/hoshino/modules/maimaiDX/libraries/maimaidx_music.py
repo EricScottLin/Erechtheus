@@ -296,20 +296,21 @@ async def get_music_alias_list() -> AliasList:
         local_alias_data = {}
     alias_data: List[Dict[str, Union[int, str, List[str]]]] = []
     try:
-        response = await maiApi.get_alias()
-
-        # 提取 content 字段
-        alias_data = response.get('content', [])
-        
-        # 验证 alias_data 是否为列表
-        if not isinstance(alias_data, list):
-            log.error(f'获取的别名数据格式不正确，期望为列表，实际为: {type(alias_data)}')
-            alias_data = await openfile(alias_file)  # 使用本地文件作为备份
-            raise ValueError('Alias data is not a list.')
-
-        await writefile(alias_file, alias_data)
-    except asyncio.exceptions.TimeoutError:
-        log.error('获取别名超时。已切换至本地暂存文件')
+    #     response = await maiApi.get_alias()
+    #     if response is None:
+    #         log.error("Failed to fetch alias data: response is None")
+    #         return []
+    #     alias_data = response.get('content', [])
+    #
+    #     # 验证 alias_data 是否为列表
+    #     if not isinstance(alias_data, list):
+    #         log.error(f'获取的别名数据格式不正确，期望为列表，实际为: {type(alias_data)}')
+    #         alias_data = await openfile(alias_file)  # 使用本地文件作为备份
+    #         raise ValueError('Alias data is not a list.')
+    #
+    #     await writefile(alias_file, alias_data)
+    # except asyncio.exceptions.TimeoutError:
+    #     log.error('获取别名超时。已切换至本地暂存文件')
         alias_data = await openfile(alias_file)
         if not alias_data:
             log.error('本地暂存别名文件为空，请自行使用浏览器访问 "https://api.yuzuchan.moe/maimaidx/maimaidxalias" 获取别名数据并保存在 "static/music_alias.json" 文件中并重启bot')

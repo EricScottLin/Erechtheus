@@ -24,7 +24,7 @@ alias_apply         = sv.on_prefix(['添加别名', '增加别名', '增添别�
 alias_agree         = sv.on_prefix(['同意别名', '同意别称'])
 alias_status        = sv.on_prefix(['当前投票', '当前别名投票', '当前别称投票'])
 alias_song          = sv.on_rex(re.compile(r'^(id)?\s?(.+)\s?有什么别[名称]$', re.IGNORECASE))
-alias_apply_status  = sv.scheduled_job('interval', minutes=5)
+# alias_apply_status  = sv.scheduled_job('interval', minutes=5)
 
 
 @update_alias
@@ -172,8 +172,8 @@ async def _(bot: NoneBot, ev: CQEvent):
     await bot.send(ev, msg, at_sender=True)
     
     
-@alias_apply_status
-async def _():
+# @alias_apply_status
+# async def _():
     try:
         group = await sv.get_enable_groups()
         if (status := await maiApi.get_alias_status()) and alias.config['global']:

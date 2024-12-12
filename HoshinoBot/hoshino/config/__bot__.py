@@ -15,7 +15,7 @@ ONEBOT_ACCESS_TOKEN = 'qiwP2a85PrY6yjBT'
 DEBUG = False           # 调试模式
 
 SUPERUSERS = [1943546421]    # 填写超级用户的QQ号，可填多个用半角逗号","隔开
-NICKNAME=["Erechthus", "Erec", "e", "\u5c0fE", "\u5c0fe", "erths", "E", "ebot", "Ebot"]          # 机器人的昵称。呼叫昵称等同于@bot，可用元组配置多个昵称
+NICKNAME=["Erechthus", "小E", "Erec", "e", "\u5c0fE", "\u5c0fe", "erths", "E", "ebot", "Ebot"]          # 机器人的昵称。呼叫昵称等同于@bot，可用元组配置多个昵称
 
 COMMAND_START = {''}    # 命令前缀（空字符串匹配任何消息）
 COMMAND_SEP = set()     # 命令分隔符（hoshino不需要该特性，保持为set()即可）
@@ -25,9 +25,11 @@ COMMAND_SEP = set()     # 命令分隔符（hoshino不需要该特性，保持�
 # 当QQ客户端与bot端不在同一台计算机时，可用http协议
 RES_PROTOCOL = 'file'
 # 资源库文件夹，需可读可写，windows下注意反斜杠转义
-RES_DIR = r'./res/'
+RES_DIR = '/HoshinoBot/res/'
 # 使用http协议时需填写，原则上该url应指向RES_DIR目录
 RES_URL = 'http://127.0.0.1:5000/static/'
+
+BOT_MANAGER_WEB_PASSWORD = '114514esl'
 
 
 # 启用的模块
@@ -49,25 +51,26 @@ MODULES_ON = {
     'maimaiDX',
     'groupguess',
     # 'hoshinobot-plugin-exchange-rate',
-    'hoshino-daliywife2',
-    'whoatme',
+    # 'hoshino-daliywife2',
+    # 'whoatme',
     'pjsk_sticker',
     # 'akinator',
     # 'huannai-plugin-shindan',
-    # 'hoshino-pjsk-plugin',
+    'hoshino-plugin-pjsk',
     # 'sysinfo-for-hoshino',
     # 'dailywife',
     # 'steam_HoshinoBot',
-    # 'steam_crawler_bot',
+    # 'steam_crawler_botV2',
     # 'sys_stats_HoshinoBot',
     # 'fucking_crazy_thursday',
     # 'MUG_one_sentence',
-    'wordle',
-    # 'group_quotations',
+    # 'wordle',
+    'group_quotations',
     # 'I_have_a_friend',
-    'whattoeat',
+    # 'whattoeat',
     # 'nbnhhsh-hoshino',
     'HuoZiYinShua_HoshinoBot',  # otto活字印刷
+    'bot_manager_web'
 
     # Disable
     # 'yinpa',

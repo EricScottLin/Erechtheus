@@ -271,10 +271,21 @@ async def arcade_card(bot: NoneBot, ev: CQEvent):
                 msg = '已订阅的机厅中未找到该机厅'
             else:
                 msg = await update_person(_arcade, nickname, value, 1)
-
-            await bot.send(ev, msg, at_sender=True)
+                await bot.send(ev, msg, at_sender=True)
     except:
         pass
+
+
+@sv_arcade.on_fullmatch(['自动清零', '清零'])
+async def arcade_clear(bot: NoneBot, ev: CQEvent):
+    if not priv.check_priv(ev, priv.SUPERUSER):
+        msg = '仅允许主人添加机厅\n请使用 来杯咖啡+内容 联系主人'
+    else:
+        gid = ev.group_id
+        arcade_list = arcade.total.group_subscribe_arcade(group_id=gid)
+        if arcade_list:
+            msg = await update_person(arcade_list, "自动清零bot", '=', 0)
+            await bot.send(ev, msg, at_sender=True)
 
 
 @sv_arcade.on_fullmatch(['机厅几人', 'jtj', 'j', 'jk'])

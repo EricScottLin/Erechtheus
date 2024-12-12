@@ -9,7 +9,7 @@ from hoshino.log import new_logger
 ### 必须
 log = new_logger('maimaiDX')
 loga = new_logger('maimaiDXArcade')
-BOTNAME = NICKNAME if isinstance(NICKNAME, str) else list(NICKNAME)[0]
+BOTNAME = NICKNAME if isinstance(NICKNAME, str) else list(NICKNAME)[1]
 
 
 SV_HELP = '请使用 帮助maimaiDX 查看帮助'

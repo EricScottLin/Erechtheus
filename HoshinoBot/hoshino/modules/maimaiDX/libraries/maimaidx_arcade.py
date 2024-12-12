@@ -291,18 +291,16 @@ async def update_person(arcadeList: List[Arcade], userName: str, value: str, per
     if len(arcadeList) == 1:
         _arcade = arcadeList[0]
         original_person = _arcade.person
-        if value in ['+', '＋', '增加', '添加', '加', '来了']:
+        if value in ['++', '+', '＋', '增加', '添加', '加', '来了']:
             if person > 30:
                 return '请勿乱玩bot，恼！'
             _arcade.person += person
-        elif value in ['-', '－', '减少', '降低', '减', '走了']:
+        elif value in ['--', '-', '－', '减少', '降低', '减', '走了']:
             if person > 30 or person > _arcade.person:
                 return '请勿乱玩bot，恼！'
-            _arcade.person -= person
-        elif value in ['=', '＝', '设置', '设定', '有']:
+        elif value in ['=', '==', '===', '＝', '设置', '设定', '有']:
             if abs(_arcade.person - person) > 30:
                 return '请勿乱玩bot，恼！'
-            _arcade.person = person
         if _arcade.person == original_person:
             return f'人数没有变化\n机厅：{_arcade.name}\n当前人数：{_arcade.person}'
         else:
