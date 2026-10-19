@@ -38,7 +38,20 @@ from nonebot.log import logger
 from nonebot.params import CommandArg
 from nonebot.plugin import PluginMetadata
 
-from . import activities, awaken, claim, currency, groups, multipliers, pricing, profile, settings, storage, wallet
+from . import (
+    activities,
+    awaken,
+    claim,
+    currency,
+    groups,
+    multipliers,
+    pricing,
+    profile,
+    redpacket,
+    settings,
+    storage,
+    wallet,
+)
 from .config import Config
 from .currency import (
     CURRENCIES,
@@ -63,6 +76,8 @@ __plugin_meta__ = PluginMetadata(
 /名片             查看个人信息卡
 /称号             查看荣耀称号与折扣
 /升阶             达到觉醒点时升阶（★+1，有奖励）
+/发红包 金额 份数   仅 bot 主：群里发月币红包
+/抢红包           抢群里的红包
 /签名 <内容>       设置签名
 /改昵称 <名字>     设置展示昵称
 /领金币           限时活动：按群等级领月币
@@ -186,6 +201,61 @@ async def _(event: MessageEvent):
     lines.append(f"   荣耀折扣：-{rate:.1%}" if rate else "   荣耀折扣：暂无")
     lines.append("   获取荣耀：每日 /签到 + 捕鱼活跃（日限随等级提升）")
     await title_cmd.finish("\n".join(lines))
+
+
+# ---------------------------------------------------------------- /发红包
+red_cmd = on_command("发红包", priority=5, block=True)
+
+
+@red_cmd.handle()
+async def _(event: MessageEvent, arg: Message = CommandArg()):
+    if not _is_owner(event):
+        return
+    if not isinstance(event, GroupMessageEvent):
+        await red_cmd.finish("请在群里发红包")
+    parts = arg.extract_plain_text().split()
+    if len(parts) < 2:
+        await red_cmd.finish("用法：/发红包 <月币总额> <份数> [祝福语]")
+    try:
+        total, slots = int(parts[0]), int(parts[1])
+    except ValueError:
+        await red_cmd.finish("总额和份数必须是整数")
+    title = parts[2] if len(parts) > 2 else ""
+    packet = await redpacket.create(
+        event.get_user_id(), event.group_id, total, slots, title
+    )
+    if packet is None:
+        await red_cmd.finish("红包创建失败：月币不足，或总额小于份数")
+    await red_cmd.finish(
+        f"🧧 红包已发出（{packet.id}）：🌙 {total} 月币 / {slots} 份\n"
+        f"群友发 /抢红包 即可抢，30 分钟内有效"
+    )
+
+
+# ---------------------------------------------------------------- /抢红包
+grab_cmd = on_command("抢红包", aliases={"领红包"}, priority=5, block=True)
+
+
+@grab_cmd.handle()
+async def _(event: MessageEvent, arg: Message = CommandArg()):
+    if not isinstance(event, GroupMessageEvent):
+        await grab_cmd.finish("请在群里抢红包")
+    rid = arg.extract_plain_text().strip().upper()
+    packet = redpacket.get(rid) if rid else redpacket.latest_in_group(event.group_id)
+    if packet is None:
+        await grab_cmd.finish("没有可抢的红包")
+    status, amount = await redpacket.grab(
+        packet.id, event.group_id, event.get_user_id()
+    )
+    if status == "ok":
+        left = f"（还剩 🌙 {packet.remaining} / {packet.slots} 份）" if not packet.done else "（已抢完）"
+        await grab_cmd.finish(f"🧧 抢到 🌙 {amount} 月币！{left}")
+    elif status == "already":
+        await grab_cmd.finish("你已经抢过这个红包了")
+    elif status == "wrong_group":
+        await grab_cmd.finish("这个红包不在本群")
+    else:
+        await grab_cmd.finish("红包已抢完或已过期")
 
 
 # ---------------------------------------------------------------- /倍率
