@@ -23,6 +23,7 @@
 """
 
 import asyncio
+from datetime import date
 
 from nonebot import get_driver, get_plugin_config, on_command
 from nonebot.adapters.onebot.v11 import (
@@ -37,7 +38,7 @@ from nonebot.log import logger
 from nonebot.params import CommandArg
 from nonebot.plugin import PluginMetadata
 
-from . import activities, awaken, claim, currency, groups, pricing, profile, settings, storage, wallet
+from . import activities, awaken, claim, currency, groups, multipliers, pricing, profile, settings, storage, wallet
 from .config import Config
 from .currency import (
     CURRENCIES,
@@ -185,6 +186,58 @@ async def _(event: MessageEvent):
     lines.append(f"   荣耀折扣：-{rate:.1%}" if rate else "   荣耀折扣：暂无")
     lines.append("   获取荣耀：每日 /签到 + 捕鱼活跃（日限随等级提升）")
     await title_cmd.finish("\n".join(lines))
+
+
+# ---------------------------------------------------------------- /倍率
+mult_cmd = on_command("倍率", aliases={"加成"}, priority=5, block=True)
+
+
+@mult_cmd.handle()
+async def _(bot: Bot, event: MessageEvent, arg: Message = CommandArg()):
+    if not _is_owner(event):
+        return
+    text = arg.extract_plain_text().strip()
+
+    if not text:
+        info = multipliers.today()
+        name = f"（{info['name']}）" if info["name"] else "（无加成）"
+        lines = [f"⚡ 今日荣耀倍率：×{info['mult']:g}{name}"]
+        ups = multipliers.upcoming()
+        if ups:
+            lines.append("近期加成：")
+            lines += [f"  {d} ×{u['mult']:g} {u['name']}" for d, u in ups]
+        lines.append(
+            "用法：/倍率 周末 3 · /倍率 2026-11-11 5 生日 "
+            "· /倍率 区间 起 止 倍率 名称 · /倍率 删除 日期"
+        )
+        await _ephemeral(bot, mult_cmd, event, "\n".join(lines))
+        return
+
+    parts = text.split()
+    try:
+        if parts[0] == "周末" and len(parts) >= 2:
+            multipliers.set_weekend(float(parts[1]))
+            msg = f"✅ 周末荣耀倍率设为 ×{float(parts[1]):g}"
+        elif parts[0] == "删除" and len(parts) >= 2:
+            ok = multipliers.remove_date(parts[1])
+            msg = f"✅ 已删除 {parts[1]}" if ok else f"没有 {parts[1]} 的规则"
+        elif parts[0] == "区间" and len(parts) >= 5:
+            mult = float(parts[3])
+            multipliers.set_range(parts[1], parts[2], mult, parts[4])
+            msg = f"✅ {parts[1]}~{parts[2]} ×{mult:g}（{parts[4]}）"
+        elif len(parts) >= 2:
+            day = date.fromisoformat(parts[0])
+            mult = float(parts[1])
+            name = parts[2] if len(parts) > 2 else ""
+            uncap = "uncap" in parts
+            multipliers.set_date(day.isoformat(), mult, name, uncap=uncap)
+            cap_txt = "（捕鱼荣耀不设上限）" if uncap else ""
+            msg = f"✅ {day} ×{mult:g} {name}{cap_txt}"
+        else:
+            msg = "用法：/倍率 周末 3 · /倍率 2026-11-11 5 生日 · /倍率 删除 2026-11-11"
+    except Exception as e:  # noqa: BLE001
+        msg = f"设置失败：{e}"
+    await _ephemeral(bot, mult_cmd, event, msg)
 
 
 # ---------------------------------------------------------------- /升阶

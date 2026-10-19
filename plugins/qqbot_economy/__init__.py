@@ -33,6 +33,7 @@ from .data import (
     get_user,
     level_status,
     sign_in_reminders,
+    today_multiplier,
     spend,
     today_str,
     update_user,
@@ -113,6 +114,9 @@ async def handle_sign(event: MessageEvent) -> None:
         user["sign_streak"] + 1 if user["last_sign_in"] == _yesterday_str() else 1
     )
     kleos = cur.kleos_for_sign_in(streak)
+    mult_info = today_multiplier()
+    if mult_info["mult"] > 1:
+        kleos = int(round(kleos * mult_info["mult"]))
     # 签到给随机少量月币：月币走固定途径、少量发放，捕鱼产出的是独立鱼币
     if plugin_config.qqbot_economy_sign_drachma_max > 0:
         lo = min(
@@ -164,6 +168,8 @@ async def handle_sign(event: MessageEvent) -> None:
         "📜 签到成功",
         f"  获得 {cur.fmt(KLEOS, kleos)}",
     ]
+    if mult_info["mult"] > 1:
+        lines.append(f"  ⚡ {mult_info['name']}加成 ×{mult_info['mult']:g}")
     if base_drachma > 0:
         lines.append(f"  获得 {cur.fmt(DRACHMA, base_drachma)}")
     lines.extend(bonus_lines)
@@ -274,15 +280,20 @@ async def handle_fish(event: MessageEvent) -> None:
         + plugin_config.qqbot_economy_fish_kleos_cap_per_star * max(0, stars_now - 1),
         plugin_config.qqbot_economy_fish_kleos_cap_max,
     )
+    mult_info = today_multiplier()
+    cap_eff = None if mult_info["uncap"] else int(cap * mult_info["mult"])
     kleos_gain = 0
     fish_kleos_used = 0
-    if cap > 0:
+    if cap > 0 or cap_eff is None:
         today_k = today_str()
         fish_kleos_used = (
             u["fish_kleos_today"] if u["fish_kleos_date"] == today_k else 0
         )
-        reward = cur.kleos_for_fish(fish.rarity)
-        kleos_gain = max(0, min(reward, cap - fish_kleos_used))
+        reward = int(round(cur.kleos_for_fish(fish.rarity) * mult_info["mult"]))
+        if cap_eff is None:
+            kleos_gain = reward
+        else:
+            kleos_gain = max(0, min(reward, cap_eff - fish_kleos_used))
         if kleos_gain > 0:
             await earn(
                 uid,
@@ -302,11 +313,13 @@ async def handle_fish(event: MessageEvent) -> None:
     if use_bait:
         lines.append("  （使用了 1 个鱼饵，稀有度权重提升）")
     if kleos_gain > 0:
+        cap_txt = "无上限" if cap_eff is None else str(cap_eff)
+        mult_txt = f"，×{mult_info['mult']:g}加成" if mult_info["mult"] > 1 else ""
         lines.append(
-            f"  活跃 +{kleos_gain} 荣耀（今日 {fish_kleos_used + kleos_gain}/{cap}）"
+            f"  活跃 +{kleos_gain} 荣耀（今日 {fish_kleos_used + kleos_gain}/{cap_txt}{mult_txt}）"
         )
-    elif cap > 0 and fish_kleos_used >= cap:
-        lines.append(f"  今日捕鱼荣耀已达上限（{cap}）")
+    elif cap_eff is not None and fish_kleos_used >= cap_eff:
+        lines.append(f"  今日捕鱼荣耀已达上限（{cap_eff}）")
     await fish_cmd.finish("\n".join(lines))
 
 
