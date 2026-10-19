@@ -159,15 +159,15 @@ async def _(event: MessageEvent):
     upcoming = next_title(level)
     rate = await pricing.discount(uid)
 
-    stage = (level - 1) // 10 + 1
     into = kleos_progress(total)[1]
     need = level_mileage(level) - into if level < MAX_LEVEL else 0
-
     stars = stars_for_level(level)
+    star_txt = "★" * stars if stars else "未觉醒"
+
     lines = [
-        f"🏅 Lv.{level} · {current[2]} {current[1]}（{'★' * stars}，第 {stage} 阶）" if current
-        else f"🏅 Lv.{level}（{'★' * stars}，第 {stage} 阶）",
-        f"   里程：{total:,}",
+        f"🏅 Lv.{level} · {current[2]} {current[1]}（{star_txt}）" if current
+        else f"🏅 Lv.{level}（{star_txt}）",
+        f"   里程：{total:,}（10 荣耀 = 1 级）",
     ]
     if level < MAX_LEVEL:
         lines.append(f"   距 Lv.{level + 1} 还差 {need:,} 里程")

@@ -146,80 +146,63 @@ def kleos_for_fish(rarity: str) -> int:
 
 
 def prestige_level(total_kleos: int) -> int:
-    """累计荣耀（里程）→ 声望等级（里程制，多阶，满级 60）。"""
+    """累计荣耀（里程）→ 声望等级（10 荣耀 = 1 级，满级 9999）。"""
     return kleos_progress(total_kleos)[0]
 
 
-# --- 荣耀里程与阶位（参考 maimai 旅行伙伴：每阶 10 级、逐阶变贵）---
-# (阶, 称号, emoji, 阶内等级数, 每级所需里程)
-STAGES: tuple[tuple[int, str, str, int, int], ...] = (
-    (1, "学徒", "🌱", 10, 100),
-    (2, "月桂", "🌿", 10, 300),
-    (3, "执政官", "⚖️", 10, 700),
-    (4, "大执政官", "🏅", 10, 1500),
-    (5, "海神眷者", "🔱", 10, 3000),
-    (6, "雅典守护者", "🛡", 10, 6000),
+# --- 荣耀里程与觉醒（参考 maimai 旅行伙伴：9/49/299/499/999 各觉醒一次，9999 点亮第六星）---
+MILEAGE_PER_LEVEL = 10  # 10 荣耀 = 1 级
+MAX_LEVEL = 9999
+# (觉醒等级, 称号, emoji)
+AWAKENINGS: tuple[tuple[int, str, str], ...] = (
+    (9, "月桂", "🌿"),
+    (49, "执政官", "⚖️"),
+    (299, "大执政官", "🏅"),
+    (499, "海神眷者", "🔱"),
+    (999, "雅典守护者", "🛡"),
+    (9999, "神话", "✨"),
 )
-
-MAX_LEVEL = sum(stage[3] for stage in STAGES)  # 60
+STAR_LEVELS: tuple[int, ...] = tuple(item[0] for item in AWAKENINGS)  # 6 颗星
+TITLES = AWAKENINGS  # 兼容旧名
 
 
 def kleos_progress(total: int) -> tuple[int, int]:
-    """累计荣耀（里程）→ (等级, 当前等级内已累计里程)。"""
-    remaining = max(0, int(total))
-    level = 1
-    for _stage, _name, _emoji, levels, per in STAGES:
-        span = levels * per
-        if remaining < span:
-            return level + remaining // per, remaining % per
-        remaining -= span
-        level += levels
-    return MAX_LEVEL, 0
+    """累计荣耀（里程）→ (等级, 当前等级内已累计里程)。10 荣耀 = 1 级。"""
+    total = max(0, int(total))
+    level = min(total // MILEAGE_PER_LEVEL + 1, MAX_LEVEL)
+    return level, total % MILEAGE_PER_LEVEL
 
 
 def level_mileage(level: int) -> int:
     """从 level 升到 level+1 需要的里程。满级返回 0。"""
-    if level >= MAX_LEVEL:
-        return 0
-    idx = min((level - 1) // 10, len(STAGES) - 1)
-    return STAGES[idx][4]
+    return 0 if level >= MAX_LEVEL else MILEAGE_PER_LEVEL
 
 
 def cumulative_mileage(level: int) -> int:
     """达到某等级所需的总里程。"""
-    target = min(max(1, level), MAX_LEVEL)
-    total = 0
-    remaining_levels = target - 1
-    for _stage, _name, _emoji, levels, per in STAGES:
-        take = min(levels, remaining_levels)
-        total += take * per
-        remaining_levels -= take
-        if remaining_levels <= 0:
-            break
-    return total
+    return (min(max(1, level), MAX_LEVEL) - 1) * MILEAGE_PER_LEVEL
 
 
 def stars_for_level(level: int) -> int:
-    """等级对应的星级（每阶觉醒一次，1~6 星）。"""
-    return min((level - 1) // 10 + 1, len(STAGES))
+    """等级对应的星级（每过一次觉醒 +1，最高 6 星）。"""
+    return sum(1 for threshold in STAR_LEVELS if level >= threshold)
 
 
 def title_for_level(level: int) -> tuple[int, str, str] | None:
-    """当前等级对应的称号 (称号起始等级, 名称, emoji)。"""
-    if level < 1:
-        return None
-    idx = min((level - 1) // 10, len(STAGES) - 1)
-    stage, name, emoji, _levels, _per = STAGES[idx]
-    return (1 + (idx * 10), name, emoji)
+    """当前等级对应的称号 (觉醒等级, 名称, emoji)；未觉醒返回 None。"""
+    best = None
+    for threshold, name, emoji in AWAKENINGS:
+        if level >= threshold:
+            best = (threshold, name, emoji)
+    return best
 
 
 def next_title(level: int) -> tuple[int, str, str] | None:
-    """下一个待解锁的称号 (起始等级, 名称, emoji)；已全部解锁返回 None。"""
-    idx = min((level - 1) // 10, len(STAGES) - 1)
-    if idx + 1 >= len(STAGES):
-        return None
-    stage, name, emoji, _levels, _per = STAGES[idx + 1]
-    return (1 + ((idx + 1) * 10), name, emoji)
+    """下一个待解锁的称号；已全部觉醒返回 None。"""
+    for item in AWAKENINGS:
+        if level < item[0]:
+            return item
+    return None
 
 
 # --- 月币（drachma）：鱼竿升级 sink（一次性，R6）---

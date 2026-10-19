@@ -266,9 +266,11 @@ async def handle_fish(event: MessageEvent) -> None:
 
     # 活跃奖励：捕鱼给少量荣耀，日上限随荣耀等级递增（对齐签到阶梯），防止沉迷刷屏
     level_now = cur.prestige_level(u["total_kleos_earned"])
+    stars_now = cur.stars_for_level(level_now)
     cap_base = plugin_config.qqbot_economy_fish_kleos_cap
     cap = min(
-        cap_base + plugin_config.qqbot_economy_fish_kleos_cap_step * max(0, level_now - 1),
+        cap_base
+        + plugin_config.qqbot_economy_fish_kleos_cap_per_star * max(0, stars_now - 1),
         plugin_config.qqbot_economy_fish_kleos_cap_max,
     )
     kleos_gain = 0

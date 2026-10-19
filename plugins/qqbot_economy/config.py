@@ -52,8 +52,8 @@ class Config(BaseModel):
     qqbot_economy_fish_kleos_cap: int = Field(
         default=100, ge=0, description="捕鱼每天荣耀上限的基数（Lv.1 的额度，0 = 不奖励）"
     )
-    qqbot_economy_fish_kleos_cap_step: int = Field(
-        default=20, ge=0, description="每级荣耀等级增加的捕鱼荣耀上限（对齐签到阶梯）"
+    qqbot_economy_fish_kleos_cap_per_star: int = Field(
+        default=120, ge=0, description="每颗觉醒星增加的捕鱼荣耀上限"
     )
     qqbot_economy_fish_kleos_cap_max: int = Field(
         default=680, ge=0, description="捕鱼荣耀日上限的封顶（对齐签到最高值）"

@@ -21,10 +21,10 @@ class Config(BaseModel):
     )
 
     qqbot_core_discount_per_level: float = Field(
-        default=0.005, ge=0.0, le=0.2, description="每级荣耀等级带来的折扣（0.005 = 0.5%，满级约 30%）"
+        default=0.0001, ge=0.0, le=0.01, description="每级荣誉等级带来的折扣（0.0001 = 0.01%，Lv.9999 约 100%）"
     )
     qqbot_core_discount_cap: float = Field(
-        default=0.30, ge=0.0, le=0.9, description="折扣总上限（0.30 = 最多 7 折）"
+        default=1.0, ge=0.0, le=1.0, description="折扣总上限（1.0 = 满级全免）"
     )
 
     qqbot_core_whitelist: list[str] = Field(
