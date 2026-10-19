@@ -171,6 +171,13 @@ async def handle_sign(event: MessageEvent) -> None:
         f"  累计 {cur.fmt(KLEOS, user['total_kleos_earned'])}",
         f"  声望等级 Lv.{level}",
     ]
+    # 今日合计（本次签到总量）
+    if drachma > 0:
+        lines.append(
+            f"  ── 今日合计：{cur.fmt(KLEOS, kleos)} + {cur.fmt(DRACHMA, drachma)}"
+        )
+    else:
+        lines.append(f"  ── 今日合计：{cur.fmt(KLEOS, kleos)}")
     # 进行中的限时活动提醒（由 qqbot_core 判断，失败不影响签到）
     lines += await sign_in_reminders(uid)
     await sign.finish("\n".join(lines))
