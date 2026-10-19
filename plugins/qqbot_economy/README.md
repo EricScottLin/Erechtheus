@@ -51,6 +51,7 @@
 | `qqbot_economy_sign_base` | 100 | 签到基础 Kleos |
 | `qqbot_economy_sign_streak_bonus` | 20 | 连签每日额外 Kleos |
 | `qqbot_economy_sign_streak_max` | 30 | 连签奖励封顶天数 |
+| `qqbot_economy_sign_drachma_ratio` | 0.10 | 签到附带月币比例（本次荣耀 × 比例，0 = 不发月币） |
 | `qqbot_economy_kleos_per_level` | 1000 | 每级声望所需累计 Kleos |
 | `qqbot_economy_fish_cooldown` | 60 | 捕鱼冷却（秒） |
 | `qqbot_economy_bait_price` | 10 | 鱼饵单价 |

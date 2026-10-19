@@ -95,6 +95,8 @@ async def handle_sign(event: MessageEvent) -> None:
         user["sign_streak"] + 1 if user["last_sign_in"] == _yesterday_str() else 1
     )
     kleos = cur.kleos_for_sign_in(streak)
+    # 签到也给少量月币：荣耀是身份，月币才是主要消耗品（比例可配）
+    drachma = int(kleos * plugin_config.qqbot_economy_sign_drachma_ratio)
 
     user = await earn(
         uid,
@@ -104,6 +106,8 @@ async def handle_sign(event: MessageEvent) -> None:
         sign_streak=streak,
         total_sign_days=user["total_sign_days"] + 1,
     )
+    if drachma > 0:
+        user = await earn(uid, DRACHMA, drachma)
 
     level = cur.prestige_level(user["total_kleos_earned"])
     streak_note = (
@@ -114,6 +118,10 @@ async def handle_sign(event: MessageEvent) -> None:
     lines = [
         "📜 签到成功",
         f"  获得 {cur.fmt(KLEOS, kleos)}",
+    ]
+    if drachma > 0:
+        lines.append(f"  获得 {cur.fmt(DRACHMA, drachma)}")
+    lines += [
         f"  连续签到 {streak} 天{streak_note}",
         f"  累计 {cur.fmt(KLEOS, user['total_kleos_earned'])}",
         f"  声望等级 Lv.{level}",
