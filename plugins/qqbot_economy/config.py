@@ -49,6 +49,9 @@ class Config(BaseModel):
     qqbot_economy_sign_early_end_hour: int = Field(
         default=9, ge=0, le=24, description="早起奖励结束小时（不含）"
     )
+    qqbot_economy_fish_kleos_cap: int = Field(
+        default=100, ge=0, description="捕鱼每天最多获得的荣耀（0 = 不奖励）"
+    )
     qqbot_economy_kleos_per_level: int = Field(
         default=1000, ge=1, description="每升一级声望所需累计荣耀"
     )

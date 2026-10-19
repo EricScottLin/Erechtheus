@@ -264,6 +264,26 @@ async def handle_fish(event: MessageEvent) -> None:
         ),
     )
 
+    # 活跃奖励：捕鱼给少量荣耀，按日上限截断，防止沉迷刷屏
+    cap = plugin_config.qqbot_economy_fish_kleos_cap
+    kleos_gain = 0
+    fish_kleos_used = 0
+    if cap > 0:
+        today_k = today_str()
+        fish_kleos_used = (
+            u["fish_kleos_today"] if u["fish_kleos_date"] == today_k else 0
+        )
+        reward = cur.kleos_for_fish(fish.rarity)
+        kleos_gain = max(0, min(reward, cap - fish_kleos_used))
+        if kleos_gain > 0:
+            await earn(
+                uid,
+                KLEOS,
+                kleos_gain,
+                fish_kleos_today=fish_kleos_used + kleos_gain,
+                fish_kleos_date=today_k,
+            )
+
     lines = [
         "🎣 你一网撒下去——",
         f"{RARITY_COLOR[fish.rarity]} 捕获 {RARITY_LABEL[fish.rarity]} {fish.name}！",
@@ -273,6 +293,12 @@ async def handle_fish(event: MessageEvent) -> None:
     ]
     if use_bait:
         lines.append("  （使用了 1 个鱼饵，稀有度权重提升）")
+    if kleos_gain > 0:
+        lines.append(
+            f"  活跃 +{kleos_gain} 荣耀（今日 {fish_kleos_used + kleos_gain}/{cap}）"
+        )
+    elif cap > 0 and fish_kleos_used >= cap:
+        lines.append(f"  今日捕鱼荣耀已达上限（{cap}）")
     await fish_cmd.finish("\n".join(lines))
 
 

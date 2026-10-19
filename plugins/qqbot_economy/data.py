@@ -44,6 +44,9 @@ DEFAULTS: dict[str, Any] = {
     "fish_count": {},  # {rarity: n}
     "best_fish": "",
     "last_fish_ts": 0.0,
+    # ---- 捕鱼活跃奖励（荣耀）每日计数 ----
+    "fish_kleos_today": 0,
+    "fish_kleos_date": "",
 }
 
 def _wallet_keys() -> set[str]:

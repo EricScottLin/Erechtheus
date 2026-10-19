@@ -58,6 +58,7 @@
 | `qqbot_economy_sign_early_bonus` | 15 | 早起（早八）签到额外月币 |
 | `qqbot_economy_sign_early_start_hour` | 5 | 早起奖励起始小时（含） |
 | `qqbot_economy_sign_early_end_hour` | 9 | 早起奖励结束小时（不含） |
+| `qqbot_economy_fish_kleos_cap` | 100 | 捕鱼每天最多获得的荣耀（0 = 不奖励） |
 | `qqbot_economy_kleos_per_level` | 1000 | 每级声望所需累计 Kleos |
 | `qqbot_economy_fish_cooldown` | 60 | 捕鱼冷却（秒） |
 | `qqbot_economy_bait_price` | 10 | 鱼饵单价 |

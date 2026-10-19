@@ -136,6 +136,15 @@ def kleos_for_sign_in(streak: int) -> int:
     return SIGN_BASE + SIGN_STREAK_BONUS * (capped - 1)
 
 
+# --- 荣耀：捕鱼活跃奖励（按稀有度，日上限在配置里）---
+FISH_KLEOS_BY_RARITY = {"R": 1, "SR": 2, "SSR": 5}
+
+
+def kleos_for_fish(rarity: str) -> int:
+    """捕到某稀有度鱼时额外获得的荣耀（未登记稀有度返回 0）。"""
+    return FISH_KLEOS_BY_RARITY.get(rarity, 0)
+
+
 def prestige_level(total_kleos: int) -> int:
     """累计荣耀 → 声望等级（L3 代币唯一的"用途"：身份）。"""
     return total_kleos // KLEOS_PER_LEVEL + 1
