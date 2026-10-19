@@ -137,7 +137,7 @@ def kleos_for_sign_in(streak: int) -> int:
 
 
 # --- 荣耀：捕鱼活跃奖励（按稀有度，日上限在配置里）---
-FISH_KLEOS_BY_RARITY = {"R": 1, "SR": 2, "SSR": 5}
+FISH_KLEOS_BY_RARITY = {"R": 2, "SR": 5, "SSR": 10}
 
 
 def kleos_for_fish(rarity: str) -> int:
