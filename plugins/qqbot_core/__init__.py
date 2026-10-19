@@ -167,7 +167,7 @@ async def _(event: MessageEvent):
         head += f" · {current[2]} {current[1]}（{'★' * st['stars']}）"
     if st["can_ascend"]:
         head += f"（卡在 Lv.{level}，先升阶）"
-    lines = [head, f"   里程：{total:,}（10 荣耀 = 1 级）"]
+    lines = [head, f"   里程：{total:,}（100 荣耀 = 1 级；1000 级后 10 荣耀 = 1 级）"]
     if st["can_ascend"]:
         lines.append("   🌟 可以觉醒了：发 /升阶 领取奖励并继续升级")
     elif level < MAX_LEVEL:

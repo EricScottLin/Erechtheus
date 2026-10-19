@@ -151,7 +151,9 @@ def prestige_level(total_kleos: int) -> int:
 
 
 # --- 荣耀里程与觉醒（参考 maimai 旅行伙伴：9/49/299/499/999 各觉醒一次，9999 点亮第六星）---
-MILEAGE_PER_LEVEL = 10  # 10 荣耀 = 1 级
+MILEAGE_PER_LEVEL = 100  # 前期：100 荣耀 = 1 级（签到一次约 1 级）
+ENDGAME_LEVEL = 1000  # 1000 级以后进入长线
+ENDGAME_MILEAGE_PER_LEVEL = 10  # 后期：10 荣耀 = 1 级
 MAX_LEVEL = 9999
 # (觉醒等级, 称号, emoji)
 AWAKENINGS: tuple[tuple[int, str, str], ...] = (
@@ -168,21 +170,35 @@ AWAKENING_REWARDS: dict[int, int] = {1: 50, 2: 100, 3: 200, 4: 300, 5: 500, 6: 1
 TITLES = AWAKENINGS  # 兼容旧名
 
 
+ENDGAME_START_MILEAGE = (ENDGAME_LEVEL - 1) * MILEAGE_PER_LEVEL  # 达到 Lv.1000 所需里程
+
+
 def kleos_progress(total: int) -> tuple[int, int]:
-    """累计荣耀（里程）→ (等级, 当前等级内已累计里程)。10 荣耀 = 1 级。"""
+    """累计荣耀（里程）→ (等级, 当前等级内已累计里程)。
+
+    前期 100 荣耀/级，1000 级以后 10 荣耀/级。
+    """
     total = max(0, int(total))
-    level = min(total // MILEAGE_PER_LEVEL + 1, MAX_LEVEL)
-    return level, total % MILEAGE_PER_LEVEL
+    if total < ENDGAME_START_MILEAGE:
+        return 1 + total // MILEAGE_PER_LEVEL, total % MILEAGE_PER_LEVEL
+    rest = total - ENDGAME_START_MILEAGE
+    level = ENDGAME_LEVEL + rest // ENDGAME_MILEAGE_PER_LEVEL
+    return min(level, MAX_LEVEL), rest % ENDGAME_MILEAGE_PER_LEVEL
 
 
 def level_mileage(level: int) -> int:
     """从 level 升到 level+1 需要的里程。满级返回 0。"""
-    return 0 if level >= MAX_LEVEL else MILEAGE_PER_LEVEL
+    if level >= MAX_LEVEL:
+        return 0
+    return MILEAGE_PER_LEVEL if level < ENDGAME_LEVEL else ENDGAME_MILEAGE_PER_LEVEL
 
 
 def cumulative_mileage(level: int) -> int:
     """达到某等级所需的总里程。"""
-    return (min(max(1, level), MAX_LEVEL) - 1) * MILEAGE_PER_LEVEL
+    target = min(max(1, level), MAX_LEVEL)
+    if target <= ENDGAME_LEVEL:
+        return (target - 1) * MILEAGE_PER_LEVEL
+    return ENDGAME_START_MILEAGE + (target - ENDGAME_LEVEL) * ENDGAME_MILEAGE_PER_LEVEL
 
 
 def stars_for_level(level: int) -> int:
