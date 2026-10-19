@@ -141,6 +141,33 @@ def prestige_level(total_kleos: int) -> int:
     return total_kleos // KLEOS_PER_LEVEL + 1
 
 
+# --- 荣耀称号（达到等级解锁，纯展示）---
+TITLES: tuple[tuple[int, str, str], ...] = (
+    (3, "月桂", "🌿"),
+    (5, "执政官", "⚖️"),
+    (10, "大执政官", "🏅"),
+    (20, "海神眷者", "🔱"),
+    (30, "雅典守护者", "🛡"),
+)
+
+
+def title_for_level(level: int) -> tuple[int, str, str] | None:
+    """当前等级对应的称号 (等级, 名称, emoji)；未达到任何称号返回 None。"""
+    best = None
+    for min_level, name, emoji in TITLES:
+        if level >= min_level:
+            best = (min_level, name, emoji)
+    return best
+
+
+def next_title(level: int) -> tuple[int, str, str] | None:
+    """下一个待解锁的称号；已全部解锁返回 None。"""
+    for item in TITLES:
+        if level < item[0]:
+            return item
+    return None
+
+
 # --- 月币（drachma）：鱼竿升级 sink（一次性，R6）---
 ROD_BASE_PRICE = 500
 ROD_PRICE_STEP = 300

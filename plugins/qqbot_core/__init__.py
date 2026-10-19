@@ -37,9 +37,18 @@ from nonebot.log import logger
 from nonebot.params import CommandArg
 from nonebot.plugin import PluginMetadata
 
-from . import activities, claim, currency, groups, profile, settings, storage, wallet
+from . import activities, claim, currency, groups, pricing, profile, settings, storage, wallet
 from .config import Config
-from .currency import CURRENCIES, fmt, get_currency, prestige_level, validate_registry
+from .currency import (
+    CURRENCIES,
+    KLEOS_PER_LEVEL,
+    fmt,
+    get_currency,
+    next_title,
+    prestige_level,
+    title_for_level,
+    validate_registry,
+)
 
 __plugin_meta__ = PluginMetadata(
     name="QQBot 核心",
@@ -47,6 +56,7 @@ __plugin_meta__ = PluginMetadata(
     usage="""\
 /余额             查看钱包与荣耀等级
 /名片             查看个人信息卡
+/称号             查看荣耀称号与折扣
 /签名 <内容>       设置签名
 /改昵称 <名字>     设置展示昵称
 /领金币           限时活动：按群等级领月币
@@ -112,7 +122,10 @@ balance_cmd = on_command("余额", aliases={"钱包", "balance"}, priority=5, bl
 async def _(event: MessageEvent):
     user = await storage.get_user(event.get_user_id())
     kleos_total = int(user["wallet"]["kleos"]["total_earned"])
-    lines = [f"🏛 荣耀等级 Lv.{prestige_level(kleos_total)}（累计 {kleos_total:,}）"]
+    level = prestige_level(kleos_total)
+    title = title_for_level(level)
+    title_txt = f" · {title[2]} {title[1]}" if title else ""
+    lines = [f"🏛 荣耀等级 Lv.{level}（累计 {kleos_total:,}）{title_txt}"]
     for key, spec in CURRENCIES.items():
         lines.append(f"{spec.symbol} {spec.name}：{user['wallet'][key]['balance']:,}")
     await balance_cmd.finish(_reply_prefix(event) + "\n".join(lines))
@@ -126,6 +139,38 @@ card_cmd = on_command("名片", aliases={"个人信息", "资料"}, priority=5, 
 async def _(bot: Bot, event: MessageEvent):
     text = await profile.render_card(bot, event, event.get_user_id())
     await card_cmd.finish(_reply_prefix(event) + text)
+
+
+# ---------------------------------------------------------------- /称号
+title_cmd = on_command("称号", aliases={"头衔"}, priority=5, block=True)
+
+
+@title_cmd.handle()
+async def _(event: MessageEvent):
+    uid = event.get_user_id()
+    user = await storage.get_user(uid)
+    total = int(user["wallet"]["kleos"]["total_earned"])
+    level = prestige_level(total)
+    current = title_for_level(level)
+    upcoming = next_title(level)
+    rate = await pricing.discount(uid)
+
+    lines = []
+    if current:
+        lines.append(f"🏅 当前称号：{current[2]} {current[1]}（Lv.{level}）")
+    else:
+        lines.append(f"🏅 当前还没有称号（Lv.{level}，累计 {total:,} 荣耀）")
+    if upcoming:
+        need = (upcoming[0] - 1) * KLEOS_PER_LEVEL
+        lines.append(
+            f"   下一称号：{upcoming[2]} {upcoming[1]}（Lv.{upcoming[0]}，"
+            f"还需 {max(0, need - total):,} 荣耀）"
+        )
+    else:
+        lines.append("   称号已全部解锁")
+    lines.append(f"   荣耀折扣：-{rate:.0%}" if rate else "   荣耀折扣：暂无")
+    lines.append("   获取荣耀：每日 /签到（连签越多给得越多）")
+    await title_cmd.finish("\n".join(lines))
 
 
 # ---------------------------------------------------------------- /签名

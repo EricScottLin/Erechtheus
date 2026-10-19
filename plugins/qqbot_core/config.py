@@ -20,6 +20,13 @@ class Config(BaseModel):
         default=60, ge=1, description="签名最大长度"
     )
 
+    qqbot_core_discount_per_level: float = Field(
+        default=0.01, ge=0.0, le=0.2, description="每级荣耀等级带来的折扣（0.01 = 1%）"
+    )
+    qqbot_core_discount_cap: float = Field(
+        default=0.30, ge=0.0, le=0.9, description="折扣总上限（0.30 = 最多 7 折）"
+    )
+
     qqbot_core_whitelist: list[str] = Field(
         default_factory=list,
         description="可执行 /爆金币 的白名单 QQ 号（bot 主之外）",

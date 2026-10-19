@@ -110,6 +110,7 @@ def _ensure_locked(uid: str) -> dict[str, Any]:
 
 async def transact(uid: str, mutate: Callable[[dict[str, Any]], Any]) -> Any:
     """在锁内对单个用户执行读改写，成功后落盘。mutate 抛异常则不保存。"""
+    uid = str(uid)
     async with _lock:
         user = _ensure_locked(uid)
         result = mutate(user)
@@ -121,6 +122,7 @@ async def transact_many(
     uids: list[str], mutate: Callable[..., Any]
 ) -> Any:
     """在锁内对多个用户执行读改写（转账用），成功后落盘。"""
+    uids = [str(u) for u in uids]
     async with _lock:
         users = [_ensure_locked(uid) for uid in uids]
         result = mutate(*users)
@@ -130,6 +132,7 @@ async def transact_many(
 
 async def get_user(uid: str) -> dict[str, Any]:
     """取用户数据（不存在则创建默认值，但不落盘）。返回副本。"""
+    uid = str(uid)
     async with _lock:
         user = _ensure_locked(uid)
         return json.loads(json.dumps(user, ensure_ascii=False))
