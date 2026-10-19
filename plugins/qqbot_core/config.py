@@ -21,7 +21,7 @@ class Config(BaseModel):
     )
 
     qqbot_core_discount_per_level: float = Field(
-        default=0.01, ge=0.0, le=0.2, description="每级荣耀等级带来的折扣（0.01 = 1%）"
+        default=0.005, ge=0.0, le=0.2, description="每级荣耀等级带来的折扣（0.005 = 0.5%，满级约 30%）"
     )
     qqbot_core_discount_cap: float = Field(
         default=0.30, ge=0.0, le=0.9, description="折扣总上限（0.30 = 最多 7 折）"

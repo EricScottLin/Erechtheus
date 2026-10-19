@@ -49,6 +49,7 @@ from .currency import (
     level_mileage,
     next_title,
     prestige_level,
+    stars_for_level,
     title_for_level,
     validate_registry,
 )
@@ -162,9 +163,10 @@ async def _(event: MessageEvent):
     into = kleos_progress(total)[1]
     need = level_mileage(level) - into if level < MAX_LEVEL else 0
 
+    stars = stars_for_level(level)
     lines = [
-        f"🏅 Lv.{level} · {current[2]} {current[1]}（第 {stage} 阶）" if current
-        else f"🏅 Lv.{level}（第 {stage} 阶）",
+        f"🏅 Lv.{level} · {current[2]} {current[1]}（{'★' * stars}，第 {stage} 阶）" if current
+        else f"🏅 Lv.{level}（{'★' * stars}，第 {stage} 阶）",
         f"   里程：{total:,}",
     ]
     if level < MAX_LEVEL:
@@ -179,7 +181,7 @@ async def _(event: MessageEvent):
         )
     else:
         lines.append("   称号已全部解锁")
-    lines.append(f"   荣耀折扣：-{rate:.0%}" if rate else "   荣耀折扣：暂无")
+    lines.append(f"   荣耀折扣：-{rate:.1%}" if rate else "   荣耀折扣：暂无")
     lines.append("   获取荣耀：每日 /签到 + 捕鱼活跃（日限随等级提升）")
     await title_cmd.finish("\n".join(lines))
 

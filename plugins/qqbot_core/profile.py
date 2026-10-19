@@ -7,7 +7,7 @@
 from typing import Any
 
 from . import storage, wallet
-from .currency import fmt, prestige_level, title_for_level
+from .currency import fmt, prestige_level, stars_for_level, title_for_level
 
 try:  # 可选依赖：装了 userinfo 才能取平台信息
     from nonebot_plugin_userinfo import get_user_info as _get_platform_info
@@ -75,7 +75,8 @@ async def render_card(bot, event, user_id: str) -> str:
     lines.append(f"  入坑：{profile.get('joined_at') or '—'}")
     title = title_for_level(level)
     title_txt = f" · {title[2]} {title[1]}" if title else ""
-    lines.append(f"  荣耀等级 Lv.{level}（累计 {total_kleos:,}）{title_txt}")
+    star_txt = "★" * stars_for_level(level)
+    lines.append(f"  荣耀 Lv.{level}{star_txt}（累计 {total_kleos:,}）{title_txt}")
     wallet_lines = " · ".join(
         fmt(key, value) for key, value in balances.items() if value
     )

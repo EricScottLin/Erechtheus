@@ -199,6 +199,11 @@ def cumulative_mileage(level: int) -> int:
     return total
 
 
+def stars_for_level(level: int) -> int:
+    """等级对应的星级（每阶觉醒一次，1~6 星）。"""
+    return min((level - 1) // 10 + 1, len(STAGES))
+
+
 def title_for_level(level: int) -> tuple[int, str, str] | None:
     """当前等级对应的称号 (称号起始等级, 名称, emoji)。"""
     if level < 1:
