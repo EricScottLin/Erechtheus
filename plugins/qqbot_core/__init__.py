@@ -275,7 +275,12 @@ async def _(bot: Bot, event: MessageEvent, arg: Message = CommandArg()):
         ups = multipliers.upcoming()
         if ups:
             lines.append("近期加成：")
-            lines += [f"  {d} ×{u['mult']:g} {u['name']}" for d, u in ups]
+            for u in ups:
+                span = u["start"] if u["start"] == u["end"] else f"{u['start']}~{u['end'][5:]}"
+                lines.append(f"  {span} ×{u['mult']:g} {u['name']}")
+        lines.append(
+            "/倍率 日历       看节日日历（国庆/除夕 ×20，传统节日 ×10，西方节日 ×5）"
+        )
         lines.append(
             "用法：/倍率 周末 3 · /倍率 2026-11-11 5 生日 "
             "· /倍率 区间 起 止 倍率 名称 · /倍率 删除 日期"
@@ -285,7 +290,20 @@ async def _(bot: Bot, event: MessageEvent, arg: Message = CommandArg()):
 
     parts = text.split()
     try:
-        if parts[0] == "周末" and len(parts) >= 2:
+        if parts[0] in ("日历", "节日"):
+            days = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 60
+            days = max(1, min(days, 400))
+            rows = multipliers.festival_listing(days)
+            if not rows:
+                msg = f"未来 {days} 天没有节日"
+            else:
+                head = f"📅 未来 {days} 天节日（共 {len(rows)} 天）："
+                shown = rows[:40]
+                body = [f"  {d[5:]} ×{i['mult']:g} {i['name']}" for d, i in shown]
+                if len(rows) > len(shown):
+                    body.append(f"  …还有 {len(rows) - len(shown)} 天")
+                msg = "\n".join([head, *body])
+        elif parts[0] == "周末" and len(parts) >= 2:
             multipliers.set_weekend(float(parts[1]))
             msg = f"✅ 周末荣耀倍率设为 ×{float(parts[1]):g}"
         elif parts[0] == "删除" and len(parts) >= 2:
@@ -307,6 +325,8 @@ async def _(bot: Bot, event: MessageEvent, arg: Message = CommandArg()):
             msg = "用法：/倍率 周末 3 · /倍率 2026-11-11 5 生日 · /倍率 删除 2026-11-11"
     except Exception as e:  # noqa: BLE001
         msg = f"设置失败：{e}"
+    if msg.startswith("📅"):  # 日历是公开信息，不撤回
+        await mult_cmd.finish(msg)
     await _ephemeral(bot, mult_cmd, event, msg)
 
 

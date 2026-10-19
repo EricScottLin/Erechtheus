@@ -2,6 +2,7 @@
 
 规则存在 qqbot_core 数据目录的 multipliers.json，bot 主可用 /倍率 命令修改：
   /倍率                       查看今天倍率与近期安排
+  /倍率 日历 [天数]            列出节日日历（国庆/除夕 20 倍、传统节日 10 倍、西方节日 5 倍）
   /倍率 周末 3                 周末统一 ×3
   /倍率 2026-11-11 5 生日       指定日期 ×5
   /倍率 区间 2026-10-01 2026-10-07 5 国庆   日期区间 ×5
@@ -19,16 +20,14 @@ from typing import Any
 
 from nonebot.log import logger
 
-from . import storage
+from . import festivals, storage
 
 RULES_FILE: Path = storage.DATA_DIR / "multipliers.json"
 
 DEFAULTS: dict[str, Any] = {
     "weekend": 2.0,
     "dates": {},  # "2026-11-11": {"mult": 5.0, "name": "生日", "uncap": False}
-    "ranges": [  # 节日区间
-        {"start": "2026-10-01", "end": "2026-10-07", "mult": 5.0, "name": "国庆"}
-    ],
+    "ranges": [],  # 自定义区间，节日日历里的假期不在这里
 }
 
 
@@ -62,6 +61,7 @@ def for_date(d: date) -> dict[str, Any]:
             "mult": float(item.get("mult", 1.0)),
             "name": item.get("name", key),
             "uncap": bool(item.get("uncap", False)),
+            "tier": festivals.tier_name(float(item.get("mult", 1.0))),
         }
     for r in rules.get("ranges", []):
         try:
@@ -70,32 +70,50 @@ def for_date(d: date) -> dict[str, Any]:
         except Exception:  # noqa: BLE001
             continue
         if start <= d <= end:
+            mult = float(r.get("mult", 1.0))
             return {
-                "mult": float(r.get("mult", 1.0)),
+                "mult": mult,
                 "name": r.get("name", "节日"),
                 "uncap": bool(r.get("uncap", False)),
+                "tier": festivals.tier_name(mult),
             }
+    hit = festivals.lookup(d)  # 内置节日日历
+    if hit:
+        hit.setdefault("uncap", False)
+        return hit
     if d.weekday() >= 5:  # 周六日
-        return {"mult": float(rules.get("weekend", 1.0)), "name": "周末", "uncap": False}
-    return {"mult": 1.0, "name": "", "uncap": False}
+        mult = float(rules.get("weekend", 1.0))
+        return {"mult": mult, "name": "周末", "uncap": False, "tier": festivals.tier_name(mult)}
+    return {"mult": 1.0, "name": "", "uncap": False, "tier": ""}
 
 
 def today() -> dict[str, Any]:
     return for_date(date.today())
 
 
-def upcoming(days: int = 60, limit: int = 8) -> list[tuple[str, dict[str, Any]]]:
-    """未来若干天里倍率 > 1 的日期（合并连续区间，只列开始日）。"""
-    rules = _load()
-    items: list[tuple[str, dict[str, Any]]] = []
+def upcoming(days: int = 60, limit: int = 8) -> list[dict[str, Any]]:
+    """未来若干天里倍率 > 1 的日子，连续同名同倍率的合并成一段。"""
+    items: list[dict[str, Any]] = []
+    cur: dict[str, Any] | None = None
     for i in range(days):
         d = date.today() + timedelta(days=i)
         info = for_date(d)
-        if info["mult"] > 1 and (not items or items[-1][1]["name"] != info["name"]):
-            items.append((d.isoformat(), info))
+        if info["mult"] <= 1 or info["name"] == "周末":
+            cur = None
+            continue
+        if cur and cur["name"] == info["name"] and cur["mult"] == info["mult"]:
+            cur["end"] = d.isoformat()
+            continue
+        cur = {**info, "start": d.isoformat(), "end": d.isoformat()}
+        items.append(cur)
         if len(items) >= limit:
             break
     return items
+
+
+def festival_listing(days: int = 60) -> list[tuple[str, dict[str, Any]]]:
+    """节日日历里未来若干天的节日（不含周末）。"""
+    return festivals.listing(date.today(), days)
 
 
 def set_weekend(mult: float) -> None:
