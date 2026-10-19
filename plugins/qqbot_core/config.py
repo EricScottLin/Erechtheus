@@ -42,3 +42,15 @@ class Config(BaseModel):
         default_factory=lambda: {1: 100, 20: 300, 50: 600, 100: 1000},
         description="群等级 → 发放额档位（取不超过等级的最高档）",
     )
+    qqbot_core_claim_multi_group_bonus: float = Field(
+        default=0.10,
+        ge=0.0,
+        le=1.0,
+        description="每多一个共同群的额外加成（0.10 = +10%）",
+    )
+    qqbot_core_claim_multi_group_bonus_cap: float = Field(
+        default=0.30,
+        ge=0.0,
+        le=1.0,
+        description="多群加成的总上限（0.30 = 最多 +30%）",
+    )

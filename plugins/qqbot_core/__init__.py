@@ -37,7 +37,7 @@ from nonebot.log import logger
 from nonebot.params import CommandArg
 from nonebot.plugin import PluginMetadata
 
-from . import activities, claim, currency, profile, settings, storage, wallet
+from . import activities, claim, currency, groups, profile, settings, storage, wallet
 from .config import Config
 from .currency import CURRENCIES, fmt, get_currency, prestige_level, validate_registry
 
@@ -178,20 +178,37 @@ async def _(bot: Bot, event: MessageEvent):
         await claim_cmd.finish("🎐 领金币活动尚未开放（或已结束）")
 
     uid = event.get_user_id()
-    level = 0
-    try:
-        member = await bot.get_group_member_info(
-            group_id=event.group_id, user_id=int(uid)
-        )
-        level = int(member.get("level", 0) or 0)
-    except Exception as e:  # noqa: BLE001 —— 取不到等级按 0 处理
-        logger.warning(f"[qqbot_core] get_group_member_info 失败：{e}")
+
+    # 跨群聚合：取 bot 与用户共同所在的群，按最高等级 + 多群小加成发放
+    levels = await groups.levels_across_groups(bot, uid)
+    if not levels:
+        # 降级：只按当前群
+        try:
+            member = await bot.get_group_member_info(
+                group_id=event.group_id, user_id=int(uid)
+            )
+            levels = {event.group_id: int(member.get("level", 0) or 0)}
+        except Exception as e:  # noqa: BLE001 —— 取不到等级按 0 处理
+            logger.warning(f"[qqbot_core] get_group_member_info 失败：{e}")
+            levels = {event.group_id: 0}
+
+    max_level = max(levels.values())
+    group_count = len(levels)
+    bonus = min(
+        max(0, group_count - 1) * plugin_config.qqbot_core_claim_multi_group_bonus,
+        plugin_config.qqbot_core_claim_multi_group_bonus_cap,
+    )
+    base = claim.amount_for_level(
+        max_level,
+        plugin_config.qqbot_core_claim_tiers,
+        plugin_config.qqbot_core_claim_amount,
+    )
+    amount = int(round(base * (1 + bonus)))
 
     result = await claim.claim(
         uid,
-        level,
-        plugin_config.qqbot_core_claim_tiers,
-        plugin_config.qqbot_core_claim_amount,
+        amount,
+        {"level": max_level, "groups": group_count, "bonus": round(bonus, 2)},
         _cap("drachma"),
     )
     if result["status"] == "already":
@@ -200,8 +217,11 @@ async def _(bot: Bot, event: MessageEvent):
         )
     if result["status"] == "capped":
         await claim_cmd.finish("今日月币获取已达上限，明天再来吧")
+    detail = f"最高群等级 {max_level} · {group_count} 个群"
+    if bonus > 0:
+        detail += f" · 多群加成 +{bonus:.0%}"
     await claim_cmd.finish(
-        f"🎉 领取成功：{fmt('drachma', result['amount'])}（群等级 {level}）"
+        f"🎉 领取成功：{fmt('drachma', result['amount'])}（{detail}）"
     )
 
 
@@ -327,6 +347,8 @@ async def _(bot: Bot, event: MessageEvent):
         f"领金币活动   {'✅ 开放中' if enabled else '⛔ 已关闭'}（{source}）",
         f"群等级档位   {tiers}",
         f"保底发放     {plugin_config.qqbot_core_claim_amount} 月币",
+        f"多群加成     每多 1 群 +{plugin_config.qqbot_core_claim_multi_group_bonus:.0%}"
+        f"（封顶 +{plugin_config.qqbot_core_claim_multi_group_bonus_cap:.0%}）",
         f"日获取上限   {caps}",
         f"白名单       {whitelist}",
         f"bot 主       {supers}",

@@ -25,12 +25,14 @@ def amount_for_level(level: int, tiers: dict[int, int], default_amount: int) -> 
 
 async def claim(
     user_id: str,
-    level: int,
-    tiers: dict[int, int],
-    default_amount: int,
+    amount: int,
+    meta: dict[str, Any],
     day_cap: int | None,
 ) -> dict[str, Any]:
-    """领取一次。返回 {"status": ok|already|capped, "amount": int}。"""
+    """领取一次。amount 为已算好的发放额，meta 记录来源信息。
+
+    返回 {"status": ok|already|capped, "amount": int}。
+    """
 
     def _m(user: dict[str, Any]) -> dict[str, Any]:
         sec = user["sections"].setdefault(SECTION, {})
@@ -39,14 +41,13 @@ async def claim(
                 "status": "already",
                 "amount": int(sec["claim"].get("amount", 0)),
             }
-        amount = amount_for_level(level, tiers, default_amount)
         granted = wallet._apply_earn(user, "drachma", amount, day_cap)
         if granted <= 0:
             return {"status": "capped", "amount": 0}
         sec["claim"] = {
             "at": storage.today_str(),
             "amount": granted,
-            "level": level,
+            **meta,
         }
         return {"status": "ok", "amount": granted}
 
