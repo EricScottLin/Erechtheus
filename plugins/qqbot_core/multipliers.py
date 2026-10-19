@@ -111,6 +111,20 @@ def upcoming(days: int = 60, limit: int = 8) -> list[dict[str, Any]]:
     return items
 
 
+def next_event(days: int = 400) -> dict[str, Any] | None:
+    """下一个"有加成"的日子（跳过纯周末），给签到播报用。
+
+    返回 {date, days_left, mult, name, tier, uncap}；没有则 None。
+    """
+    start = date.today()
+    for i in range(1, days + 1):
+        d = start + timedelta(days=i)
+        info = for_date(d)
+        if info["mult"] > 1 and info["name"] != "周末":
+            return {**info, "date": d.isoformat(), "days_left": i}
+    return None
+
+
 def festival_listing(days: int = 60) -> list[tuple[str, dict[str, Any]]]:
     """节日日历里未来若干天的节日（不含周末）。"""
     return festivals.listing(date.today(), days)

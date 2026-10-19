@@ -32,6 +32,7 @@ from .data import (
     earn,
     get_user,
     level_status,
+    next_event,
     sign_in_reminders,
     today_multiplier,
     spend,
@@ -73,6 +74,15 @@ def _yesterday_str() -> str:
     return (date.today() - timedelta(days=1)).isoformat()
 
 
+def _event_line(ev: dict) -> str:
+    """把"下一个活动"渲染成一行，例如：📅 下一个活动：10-24 联合国日 ×5（4 天后）。"""
+    iso = str(ev.get("date", ""))
+    days = int(ev.get("days_left", 0))
+    day = iso[5:] if iso[:4] == str(date.today().year) else iso
+    when = "明天" if days == 1 else f"{days} 天后"
+    return f"📅 下一个活动：{day} {ev.get('name', '')} ×{float(ev.get('mult', 1)):g}（{when}）"
+
+
 def _best_value(best_name: str) -> int:
     """按鱼名反查 月币 价值，用于判断是否刷新最佳渔获。"""
     for f in FISHES:
@@ -92,6 +102,7 @@ async def handle_sign(event: MessageEvent) -> None:
     today = today_str()
 
     if user["last_sign_in"] == today:
+        ev = next_event()
         penalty = 0
         if plugin_config.qqbot_economy_sign_duplicate_penalty_max > 0:
             lo = min(
@@ -107,6 +118,8 @@ async def handle_sign(event: MessageEvent) -> None:
         msg = f"今天已经签过到了~ 连续 {user['sign_streak']} 天，明天再来吧"
         if penalty > 0:
             msg += f"\n（重复签到，扣了 {cur.fmt(DRACHMA, penalty)}）"
+        if ev:
+            msg += "\n" + _event_line(ev)
         await sign.finish(msg)
 
     # 连签判定：昨天签过则 +1，否则重新从 1 开始
@@ -187,6 +200,10 @@ async def handle_sign(event: MessageEvent) -> None:
         lines.append(f"  ── 今日合计：{cur.fmt(KLEOS, kleos)}")
     # 进行中的限时活动提醒（由 qqbot_core 判断，失败不影响签到）
     lines += await sign_in_reminders(uid)
+    # 下一个活动 + 当天预设倍率
+    ev = next_event()
+    if ev:
+        lines.append(_event_line(ev))
     await sign.finish("\n".join(lines))
 
 

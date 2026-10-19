@@ -131,6 +131,15 @@ def today_multiplier() -> dict:
     return require_core().multipliers.today()
 
 
+def next_event() -> dict | None:
+    """下一个节日/活动及其预设倍率（由 qqbot_core 的节日日历决定）。"""
+    try:
+        fn = getattr(require_core().multipliers, "next_event", None)
+        return fn() if fn else None
+    except Exception:  # noqa: BLE001 —— 播报失败不影响签到
+        return None
+
+
 async def level_status(user_id: str) -> dict:
     """荣耀生效等级/星级（升阶状态由 qqbot_core 管）。"""
     return await require_core().awaken.status(user_id)
