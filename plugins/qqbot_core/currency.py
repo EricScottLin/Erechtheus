@@ -146,35 +146,75 @@ def kleos_for_fish(rarity: str) -> int:
 
 
 def prestige_level(total_kleos: int) -> int:
-    """累计荣耀 → 声望等级（L3 代币唯一的"用途"：身份）。"""
-    return total_kleos // KLEOS_PER_LEVEL + 1
+    """累计荣耀（里程）→ 声望等级（里程制，多阶，满级 60）。"""
+    return kleos_progress(total_kleos)[0]
 
 
-# --- 荣耀称号（达到等级解锁，纯展示）---
-TITLES: tuple[tuple[int, str, str], ...] = (
-    (3, "月桂", "🌿"),
-    (5, "执政官", "⚖️"),
-    (10, "大执政官", "🏅"),
-    (20, "海神眷者", "🔱"),
-    (30, "雅典守护者", "🛡"),
+# --- 荣耀里程与阶位（参考 maimai 旅行伙伴：每阶 10 级、逐阶变贵）---
+# (阶, 称号, emoji, 阶内等级数, 每级所需里程)
+STAGES: tuple[tuple[int, str, str, int, int], ...] = (
+    (1, "学徒", "🌱", 10, 100),
+    (2, "月桂", "🌿", 10, 300),
+    (3, "执政官", "⚖️", 10, 700),
+    (4, "大执政官", "🏅", 10, 1500),
+    (5, "海神眷者", "🔱", 10, 3000),
+    (6, "雅典守护者", "🛡", 10, 6000),
 )
+
+MAX_LEVEL = sum(stage[3] for stage in STAGES)  # 60
+
+
+def kleos_progress(total: int) -> tuple[int, int]:
+    """累计荣耀（里程）→ (等级, 当前等级内已累计里程)。"""
+    remaining = max(0, int(total))
+    level = 1
+    for _stage, _name, _emoji, levels, per in STAGES:
+        span = levels * per
+        if remaining < span:
+            return level + remaining // per, remaining % per
+        remaining -= span
+        level += levels
+    return MAX_LEVEL, 0
+
+
+def level_mileage(level: int) -> int:
+    """从 level 升到 level+1 需要的里程。满级返回 0。"""
+    if level >= MAX_LEVEL:
+        return 0
+    idx = min((level - 1) // 10, len(STAGES) - 1)
+    return STAGES[idx][4]
+
+
+def cumulative_mileage(level: int) -> int:
+    """达到某等级所需的总里程。"""
+    target = min(max(1, level), MAX_LEVEL)
+    total = 0
+    remaining_levels = target - 1
+    for _stage, _name, _emoji, levels, per in STAGES:
+        take = min(levels, remaining_levels)
+        total += take * per
+        remaining_levels -= take
+        if remaining_levels <= 0:
+            break
+    return total
 
 
 def title_for_level(level: int) -> tuple[int, str, str] | None:
-    """当前等级对应的称号 (等级, 名称, emoji)；未达到任何称号返回 None。"""
-    best = None
-    for min_level, name, emoji in TITLES:
-        if level >= min_level:
-            best = (min_level, name, emoji)
-    return best
+    """当前等级对应的称号 (称号起始等级, 名称, emoji)。"""
+    if level < 1:
+        return None
+    idx = min((level - 1) // 10, len(STAGES) - 1)
+    stage, name, emoji, _levels, _per = STAGES[idx]
+    return (1 + (idx * 10), name, emoji)
 
 
 def next_title(level: int) -> tuple[int, str, str] | None:
-    """下一个待解锁的称号；已全部解锁返回 None。"""
-    for item in TITLES:
-        if level < item[0]:
-            return item
-    return None
+    """下一个待解锁的称号 (起始等级, 名称, emoji)；已全部解锁返回 None。"""
+    idx = min((level - 1) // 10, len(STAGES) - 1)
+    if idx + 1 >= len(STAGES):
+        return None
+    stage, name, emoji, _levels, _per = STAGES[idx + 1]
+    return (1 + ((idx + 1) * 10), name, emoji)
 
 
 # --- 月币（drachma）：鱼竿升级 sink（一次性，R6）---

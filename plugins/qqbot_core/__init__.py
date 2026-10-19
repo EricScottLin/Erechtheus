@@ -41,9 +41,12 @@ from . import activities, claim, currency, groups, pricing, profile, settings, s
 from .config import Config
 from .currency import (
     CURRENCIES,
-    KLEOS_PER_LEVEL,
+    MAX_LEVEL,
+    cumulative_mileage,
     fmt,
     get_currency,
+    kleos_progress,
+    level_mileage,
     next_title,
     prestige_level,
     title_for_level,
@@ -155,21 +158,29 @@ async def _(event: MessageEvent):
     upcoming = next_title(level)
     rate = await pricing.discount(uid)
 
-    lines = []
-    if current:
-        lines.append(f"🏅 当前称号：{current[2]} {current[1]}（Lv.{level}）")
+    stage = (level - 1) // 10 + 1
+    into = kleos_progress(total)[1]
+    need = level_mileage(level) - into if level < MAX_LEVEL else 0
+
+    lines = [
+        f"🏅 Lv.{level} · {current[2]} {current[1]}（第 {stage} 阶）" if current
+        else f"🏅 Lv.{level}（第 {stage} 阶）",
+        f"   里程：{total:,}",
+    ]
+    if level < MAX_LEVEL:
+        lines.append(f"   距 Lv.{level + 1} 还差 {need:,} 里程")
     else:
-        lines.append(f"🏅 当前还没有称号（Lv.{level}，累计 {total:,} 荣耀）")
+        lines.append("   已满级")
     if upcoming:
-        need = (upcoming[0] - 1) * KLEOS_PER_LEVEL
+        need_title = cumulative_mileage(upcoming[0]) - total
         lines.append(
             f"   下一称号：{upcoming[2]} {upcoming[1]}（Lv.{upcoming[0]}，"
-            f"还需 {max(0, need - total):,} 荣耀）"
+            f"还需 {max(0, need_title):,} 里程）"
         )
     else:
         lines.append("   称号已全部解锁")
     lines.append(f"   荣耀折扣：-{rate:.0%}" if rate else "   荣耀折扣：暂无")
-    lines.append("   获取荣耀：每日 /签到（连签越多给得越多）")
+    lines.append("   获取荣耀：每日 /签到 + 捕鱼活跃（日限随等级提升）")
     await title_cmd.finish("\n".join(lines))
 
 
