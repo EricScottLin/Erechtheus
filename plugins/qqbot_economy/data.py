@@ -123,6 +123,11 @@ async def spend(
     return await get_user(user_id) if ok else None
 
 
+async def claim_once(section: str, key: str, date: str, by: str) -> bool:
+    """原子抢占"每日首次"标记（用于每日首签）。"""
+    return await require_core().storage.claim_once(section, key, date, by)
+
+
 async def sign_in_reminders(user_id: str) -> list[str]:
     """签到成功后要展示的活动提醒（由 qqbot_core 判断，失败则静默）。"""
     core = require_core()

@@ -16,7 +16,7 @@
 
 import random
 import time
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 from nonebot import get_plugin_config, on_command
 from nonebot.adapters.onebot.v11 import MessageEvent, Message
@@ -28,6 +28,7 @@ from . import currency as cur
 from .config import Config
 from .data import (
     all_users,
+    claim_once,
     earn,
     get_user,
     sign_in_reminders,
@@ -89,7 +90,22 @@ async def handle_sign(event: MessageEvent) -> None:
     today = today_str()
 
     if user["last_sign_in"] == today:
-        await sign.finish(f"今天已经签过到了~ 连续 {user['sign_streak']} 天，明天再来吧")
+        penalty = 0
+        if plugin_config.qqbot_economy_sign_duplicate_penalty_max > 0:
+            lo = min(
+                plugin_config.qqbot_economy_sign_duplicate_penalty_min,
+                plugin_config.qqbot_economy_sign_duplicate_penalty_max,
+            )
+            penalty = random.randint(
+                lo, plugin_config.qqbot_economy_sign_duplicate_penalty_max
+            )
+            penalty = min(penalty, int(user["drachma"]))
+        if penalty > 0:
+            await spend(uid, DRACHMA, penalty)
+        msg = f"今天已经签过到了~ 连续 {user['sign_streak']} 天，明天再来吧"
+        if penalty > 0:
+            msg += f"\n（重复签到，扣了 {cur.fmt(DRACHMA, penalty)}）"
+        await sign.finish(msg)
 
     # 连签判定：昨天签过则 +1，否则重新从 1 开始
     streak = (
@@ -105,6 +121,26 @@ async def handle_sign(event: MessageEvent) -> None:
         drachma = random.randint(lo, plugin_config.qqbot_economy_sign_drachma_max)
     else:
         drachma = 0
+
+    base_drachma = drachma  # 基础发放（展示用，奖励单独列）
+    # 每日首签奖励（全局第一个签到的人）
+    bonus_lines: list[str] = []
+    if plugin_config.qqbot_economy_sign_first_bonus > 0 and await claim_once(
+        "qqbot_economy", "first_sign", today, uid
+    ):
+        drachma += plugin_config.qqbot_economy_sign_first_bonus
+        bonus_lines.append(f"🏅 今日首签 +{plugin_config.qqbot_economy_sign_first_bonus} 月币")
+
+    # 早起（早八）自律奖励
+    hour = datetime.now().hour
+    start_h = plugin_config.qqbot_economy_sign_early_start_hour
+    end_h = plugin_config.qqbot_economy_sign_early_end_hour
+    if (
+        plugin_config.qqbot_economy_sign_early_bonus > 0
+        and (start_h <= hour < end_h or (start_h > end_h and (hour >= start_h or hour < end_h)))
+    ):
+        drachma += plugin_config.qqbot_economy_sign_early_bonus
+        bonus_lines.append(f"🌅 早起自律 +{plugin_config.qqbot_economy_sign_early_bonus} 月币")
 
     user = await earn(
         uid,
@@ -127,8 +163,9 @@ async def handle_sign(event: MessageEvent) -> None:
         "📜 签到成功",
         f"  获得 {cur.fmt(KLEOS, kleos)}",
     ]
-    if drachma > 0:
-        lines.append(f"  获得 {cur.fmt(DRACHMA, drachma)}")
+    if base_drachma > 0:
+        lines.append(f"  获得 {cur.fmt(DRACHMA, base_drachma)}")
+    lines.extend(bonus_lines)
     lines += [
         f"  连续签到 {streak} 天{streak_note}",
         f"  累计 {cur.fmt(KLEOS, user['total_kleos_earned'])}",

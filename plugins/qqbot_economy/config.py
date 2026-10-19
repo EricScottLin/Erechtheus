@@ -31,6 +31,24 @@ class Config(BaseModel):
     qqbot_economy_sign_drachma_max: int = Field(
         default=60, ge=0, description="签到附带月币的最大值（随机区间，0 = 不给月币）"
     )
+    qqbot_economy_sign_duplicate_penalty_min: int = Field(
+        default=1, ge=0, description="重复签到扣月币的最小值（随机）"
+    )
+    qqbot_economy_sign_duplicate_penalty_max: int = Field(
+        default=5, ge=0, description="重复签到扣月币的最大值（0 = 不惩罚）"
+    )
+    qqbot_economy_sign_first_bonus: int = Field(
+        default=20, ge=0, description="每日首签额外月币"
+    )
+    qqbot_economy_sign_early_bonus: int = Field(
+        default=15, ge=0, description="早起签到（早八）额外月币"
+    )
+    qqbot_economy_sign_early_start_hour: int = Field(
+        default=5, ge=0, le=23, description="早起奖励起始小时（含）"
+    )
+    qqbot_economy_sign_early_end_hour: int = Field(
+        default=9, ge=0, le=24, description="早起奖励结束小时（不含）"
+    )
     qqbot_economy_kleos_per_level: int = Field(
         default=1000, ge=1, description="每升一级声望所需累计荣耀"
     )

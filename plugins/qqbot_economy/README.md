@@ -52,6 +52,12 @@
 | `qqbot_economy_sign_streak_max` | 30 | 连签奖励封顶天数 |
 | `qqbot_economy_sign_drachma_min` | 10 | 签到附带月币最小值（随机区间） |
 | `qqbot_economy_sign_drachma_max` | 60 | 签到附带月币最大值（0 = 不发月币） |
+| `qqbot_economy_sign_duplicate_penalty_min` | 1 | 重复签到扣月币最小值 |
+| `qqbot_economy_sign_duplicate_penalty_max` | 5 | 重复签到扣月币最大值（0 = 不惩罚） |
+| `qqbot_economy_sign_first_bonus` | 20 | 每日首签额外月币 |
+| `qqbot_economy_sign_early_bonus` | 15 | 早起（早八）签到额外月币 |
+| `qqbot_economy_sign_early_start_hour` | 5 | 早起奖励起始小时（含） |
+| `qqbot_economy_sign_early_end_hour` | 9 | 早起奖励结束小时（不含） |
 | `qqbot_economy_kleos_per_level` | 1000 | 每级声望所需累计 Kleos |
 | `qqbot_economy_fish_cooldown` | 60 | 捕鱼冷却（秒） |
 | `qqbot_economy_bait_price` | 10 | 鱼饵单价 |

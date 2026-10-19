@@ -191,6 +191,24 @@ async def all_users() -> dict[str, dict[str, Any]]:
         return json.loads(json.dumps(data, ensure_ascii=False))
 
 
+async def claim_once(section: str, key: str, date: str, by: str) -> bool:
+    """原子抢占"每日首次"标记。返回 True 表示本次抢到。
+
+    存在系统用户 "__system__" 的 sections.<section> 里，
+    多个用户同时签到时只会有一个拿到。
+    """
+
+    def _m(user: dict[str, Any]) -> bool:
+        sec = user["sections"].setdefault(section, {})
+        if sec.get(key) == date:
+            return False
+        sec[key] = date
+        sec[f"{key}_by"] = by
+        return True
+
+    return await transact("__system__", _m)
+
+
 # ---------------------------------------------------------------- 全局运行时设置
 def _load_settings() -> dict[str, Any]:
     global _settings_cache
