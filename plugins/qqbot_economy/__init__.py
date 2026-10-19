@@ -31,6 +31,7 @@ from .data import (
     claim_once,
     earn,
     get_user,
+    level_status,
     sign_in_reminders,
     spend,
     today_str,
@@ -153,7 +154,7 @@ async def handle_sign(event: MessageEvent) -> None:
     if drachma > 0:
         user = await earn(uid, DRACHMA, drachma)
 
-    level = cur.prestige_level(user["total_kleos_earned"])
+    level = (await level_status(uid))["level"]
     streak_note = (
         f"（{cur.SIGN_STREAK_MAX} 天已满，不再增长）"
         if streak >= cur.SIGN_STREAK_MAX
@@ -265,8 +266,8 @@ async def handle_fish(event: MessageEvent) -> None:
     )
 
     # 活跃奖励：捕鱼给少量荣耀，日上限随荣耀等级递增（对齐签到阶梯），防止沉迷刷屏
-    level_now = cur.prestige_level(u["total_kleos_earned"])
-    stars_now = cur.stars_for_level(level_now)
+    lv_status = await level_status(uid)
+    stars_now = lv_status["stars"]
     cap_base = plugin_config.qqbot_economy_fish_kleos_cap
     cap = min(
         cap_base

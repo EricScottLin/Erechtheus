@@ -163,6 +163,8 @@ AWAKENINGS: tuple[tuple[int, str, str], ...] = (
     (9999, "神话", "✨"),
 )
 STAR_LEVELS: tuple[int, ...] = tuple(item[0] for item in AWAKENINGS)  # 6 颗星
+# 每次觉醒的一次性月币奖励（按目标星级）
+AWAKENING_REWARDS: dict[int, int] = {1: 50, 2: 100, 3: 200, 4: 300, 5: 500, 6: 1000}
 TITLES = AWAKENINGS  # 兼容旧名
 
 

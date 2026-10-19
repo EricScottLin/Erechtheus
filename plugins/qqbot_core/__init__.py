@@ -37,7 +37,7 @@ from nonebot.log import logger
 from nonebot.params import CommandArg
 from nonebot.plugin import PluginMetadata
 
-from . import activities, claim, currency, groups, pricing, profile, settings, storage, wallet
+from . import activities, awaken, claim, currency, groups, pricing, profile, settings, storage, wallet
 from .config import Config
 from .currency import (
     CURRENCIES,
@@ -61,6 +61,7 @@ __plugin_meta__ = PluginMetadata(
 /余额             查看钱包与荣耀等级
 /名片             查看个人信息卡
 /称号             查看荣耀称号与折扣
+/升阶             达到觉醒点时升阶（★+1，有奖励）
 /签名 <内容>       设置签名
 /改昵称 <名字>     设置展示昵称
 /领金币           限时活动：按群等级领月币
@@ -124,12 +125,14 @@ balance_cmd = on_command("余额", aliases={"钱包", "balance"}, priority=5, bl
 
 @balance_cmd.handle()
 async def _(event: MessageEvent):
-    user = await storage.get_user(event.get_user_id())
-    kleos_total = int(user["wallet"]["kleos"]["total_earned"])
-    level = prestige_level(kleos_total)
-    title = title_for_level(level)
+    status = await awaken.status(event.get_user_id())
+    level = status["level"]
+    title = status["title"]
     title_txt = f" · {title[2]} {title[1]}" if title else ""
-    lines = [f"🏛 荣耀等级 Lv.{level}（累计 {kleos_total:,}）{title_txt}"]
+    star_txt = "★" * status["stars"]
+    lines = [
+        f"🏛 荣耀等级 Lv.{level}{star_txt}（累计 {status['total']:,}）{title_txt}"
+    ]
     for key, spec in CURRENCIES.items():
         lines.append(f"{spec.symbol} {spec.name}：{user['wallet'][key]['balance']:,}")
     await balance_cmd.finish(_reply_prefix(event) + "\n".join(lines))
@@ -152,38 +155,68 @@ title_cmd = on_command("称号", aliases={"头衔"}, priority=5, block=True)
 @title_cmd.handle()
 async def _(event: MessageEvent):
     uid = event.get_user_id()
-    user = await storage.get_user(uid)
-    total = int(user["wallet"]["kleos"]["total_earned"])
-    level = prestige_level(total)
-    current = title_for_level(level)
-    upcoming = next_title(level)
+    st = await awaken.status(uid)
+    total, level = st["total"], st["level"]
+    current, upcoming = st["title"], st["next_title"]
     rate = await pricing.discount(uid)
 
     into = kleos_progress(total)[1]
     need = level_mileage(level) - into if level < MAX_LEVEL else 0
-    stars = stars_for_level(level)
-    star_txt = "★" * stars if stars else "未觉醒"
-
-    lines = [
-        f"🏅 Lv.{level} · {current[2]} {current[1]}（{star_txt}）" if current
-        else f"🏅 Lv.{level}（{star_txt}）",
-        f"   里程：{total:,}（10 荣耀 = 1 级）",
-    ]
-    if level < MAX_LEVEL:
+    head = f"🏅 Lv.{level}"
+    if current:
+        head += f" · {current[2]} {current[1]}（{'★' * st['stars']}）"
+    if st["can_ascend"]:
+        head += f"（卡在 Lv.{level}，先升阶）"
+    lines = [head, f"   里程：{total:,}（10 荣耀 = 1 级）"]
+    if st["can_ascend"]:
+        lines.append("   🌟 可以觉醒了：发 /升阶 领取奖励并继续升级")
+    elif level < MAX_LEVEL:
         lines.append(f"   距 Lv.{level + 1} 还差 {need:,} 里程")
     else:
         lines.append("   已满级")
-    if upcoming:
+    if upcoming and not st["can_ascend"]:
         need_title = cumulative_mileage(upcoming[0]) - total
         lines.append(
-            f"   下一称号：{upcoming[2]} {upcoming[1]}（Lv.{upcoming[0]}，"
+            f"   下一觉醒：{upcoming[2]} {upcoming[1]}（Lv.{upcoming[0]}，"
             f"还需 {max(0, need_title):,} 里程）"
         )
     else:
-        lines.append("   称号已全部解锁")
+        lines.append("   已全部觉醒")
     lines.append(f"   荣耀折扣：-{rate:.1%}" if rate else "   荣耀折扣：暂无")
     lines.append("   获取荣耀：每日 /签到 + 捕鱼活跃（日限随等级提升）")
     await title_cmd.finish("\n".join(lines))
+
+
+# ---------------------------------------------------------------- /升阶
+ascend_cmd = on_command("升阶", aliases={"觉醒"}, priority=5, block=True)
+
+
+@ascend_cmd.handle()
+async def _(event: MessageEvent):
+    uid = event.get_user_id()
+    st = await awaken.status(uid)
+    if not st["can_ascend"]:
+        if st["next_threshold"] is not None and st["level"] < st["next_threshold"]:
+            await ascend_cmd.finish(
+                f"还没到觉醒点：Lv.{st['next_threshold']} 才能升阶（当前 Lv.{st['level']}）"
+            )
+        await ascend_cmd.finish("已经六星满觉醒啦")
+    result = await awaken.ascend(uid)
+    if result is None:
+        await ascend_cmd.finish("升阶失败，请稍后再试")
+    title = result["title"]
+    after = await awaken.status(uid)
+    nxt = (
+        f"下一觉醒点：Lv.{after['next_threshold']}"
+        if after["next_threshold"] is not None
+        else "已达到最高觉醒"
+    )
+    lines = [
+        f"🌟 觉醒成功！★{result['star']} {title[2]} {title[1]}",
+        f"   奖励：{fmt('drachma', result['reward'])}",
+        f"   {nxt}",
+    ]
+    await ascend_cmd.finish("\n".join(lines))
 
 
 # ---------------------------------------------------------------- /签名

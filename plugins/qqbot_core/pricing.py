@@ -8,14 +8,13 @@
 
 from nonebot import get_plugin_config
 
-from . import storage
+from . import awaken, storage
 from .config import Config
 from .currency import next_title, prestige_level, title_for_level
 
 
 async def level_of(user_id: str) -> int:
-    user = await storage.get_user(user_id)
-    return prestige_level(int(user["wallet"]["kleos"]["total_earned"]))
+    return (await awaken.status(user_id))["level"]
 
 
 async def title_of(user_id: str) -> str:

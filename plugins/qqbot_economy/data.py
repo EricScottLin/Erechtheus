@@ -126,6 +126,11 @@ async def spend(
     return await get_user(user_id) if ok else None
 
 
+async def level_status(user_id: str) -> dict:
+    """荣耀生效等级/星级（升阶状态由 qqbot_core 管）。"""
+    return await require_core().awaken.status(user_id)
+
+
 async def claim_once(section: str, key: str, date: str, by: str) -> bool:
     """原子抢占"每日首次"标记（用于每日首签）。"""
     return await require_core().storage.claim_once(section, key, date, by)

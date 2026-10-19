@@ -4,7 +4,7 @@
 活动是否进行中、用户是否已参与，都由本模块判断，玩法插件不关心细节。
 """
 
-from . import settings, storage
+from . import awaken, settings, storage
 
 SECTION = "qqbot_core"
 
@@ -22,5 +22,10 @@ async def reminders(user_id: str, claim_enabled_default: bool = False) -> list[s
         user_id
     ):
         lines.append("🎐 领金币活动进行中：群里发 /领金币 领取月币（每人限一次）")
+
+    # 觉醒提醒：等级卡在觉醒点、还没升阶
+    st = await awaken.status(user_id)
+    if st["can_ascend"]:
+        lines.append("🌟 可以觉醒了：发 /升阶 领取觉醒奖励并继续升级")
 
     return lines
