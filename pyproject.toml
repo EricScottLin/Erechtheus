@@ -1,0 +1,29 @@
+[project]
+name = "qqbot"
+version = "0.1.0"
+description = "qqbot"
+readme = "README.md"
+requires-python = ">=3.10, <4.0"
+dependencies = [
+    "nonebot2[fastapi]>=2.5.0",
+    "nonebot-adapter-onebot>=2.4.6"
+]
+
+[tool.nonebot]
+# 本地插件目录：NoneBot 会加载该目录下的所有包/单文件插件
+plugin_dirs = ["plugins"]
+builtin_plugins = []
+
+[tool.nonebot.adapters]
+nonebot-adapter-onebot = [
+    { name = "OneBot V11", module_name = "nonebot.adapters.onebot.v11" }
+]
+
+[tool.nonebot.plugins]
+# 本地编写的插件由入口文件 bot.py 用 Path 显式加载（见 bot.py），
+# 此处不重复声明，否则 load_from_toml 会与 plugin_dirs 重复加载同一插件报
+# "Plugin already exists"。
+# 注意：nonebot_plugin_bilibili 已从 PyPI 版（mengbingnaixi 的动态订阅插件）
+# 换成 vendored 的 GreaterLG70 视频解析插件，见 plugins/nonebot_plugin_bilibili/
+"@local" = []
+nonebot_plugin_maimaidx = ["nonebot_plugin_maimaidx"]

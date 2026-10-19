@@ -1,0 +1,795 @@
+diff --git a/HoshinoBot/hoshino/modules/maimaiDX/__init__.py b/HoshinoBot/hoshino/modules/maimaiDX/__init__.py
+index 3135aec..3620b80 100644
+--- a/HoshinoBot/hoshino/modules/maimaiDX/__init__.py
++++ b/HoshinoBot/hoshino/modules/maimaiDX/__init__.py
+@@ -9,7 +9,7 @@ from hoshino.log import new_logger
+ ### 必须
+ log = new_logger('maimaiDX')
+ loga = new_logger('maimaiDXArcade')
+-BOTNAME = NICKNAME if isinstance(NICKNAME, str) else list(NICKNAME)[0]
++BOTNAME = NICKNAME if isinstance(NICKNAME, str) else list(NICKNAME)[1]
+ 
+ 
+ SV_HELP = '请使用 帮助maimaiDX 查看帮助'
+@@ -26,7 +26,7 @@ if not arcades_json.exists():
+     arcades_json.write_text("[]")
+ 
+ config_json: Path = static / 'config.json'                      # token
+-alias_file: Path = static / 'music_alias.json_bk'                  # 别名暂存文件
++alias_file: Path = static / 'music_alias.json'                  # 别名暂存文件
+ local_alias_file: Path = static / 'local_music_alias.json'      # 本地别名文件
+ music_file: Path = static / 'music_data.json'                   # 曲目暂存文件
+ chart_file: Path = static / 'music_chart.json'                  # 谱面数据暂存文件
+diff --git a/HoshinoBot/hoshino/modules/maimaiDX/command/mai_alias.py b/HoshinoBot/hoshino/modules/maimaiDX/command/mai_alias.py
+index a9be125..49a01cf 100644
+--- a/HoshinoBot/hoshino/modules/maimaiDX/command/mai_alias.py
++++ b/HoshinoBot/hoshino/modules/maimaiDX/command/mai_alias.py
+@@ -24,7 +24,7 @@ alias_apply         = sv.on_prefix(['添加别名', '增加别名', '增添别
+ alias_agree         = sv.on_prefix(['同意别名', '同意别称'])
+ alias_status        = sv.on_prefix(['当前投票', '当前别名投票', '当前别称投票'])
+ alias_song          = sv.on_rex(re.compile(r'^(id)?\s?(.+)\s?有什么别[名称]$', re.IGNORECASE))
+-alias_apply_status  = sv.scheduled_job('interval', minutes=5)
++# alias_apply_status  = sv.scheduled_job('interval', minutes=5)
+ 
+ 
+ @update_alias
+@@ -172,8 +172,8 @@ async def _(bot: NoneBot, ev: CQEvent):
+     await bot.send(ev, msg, at_sender=True)
+     
+     
+-@alias_apply_status
+-async def _():
++# @alias_apply_status
++# async def _():
+     try:
+         group = await sv.get_enable_groups()
+         if (status := await maiApi.get_alias_status()) and alias.config['global']:
+diff --git a/HoshinoBot/hoshino/modules/maimaiDX/command/mai_search.py b/HoshinoBot/hoshino/modules/maimaiDX/command/mai_search.py
+index 61a93e2..a78d5b3 100644
+--- a/HoshinoBot/hoshino/modules/maimaiDX/command/mai_search.py
++++ b/HoshinoBot/hoshino/modules/maimaiDX/command/mai_search.py
+@@ -199,7 +199,8 @@ async def _(bot: NoneBot, ev: CQEvent):
+                 msg += f'※ 可以使用指令「同意别名 {_s["Tag"]}」进行投票'
+                 await bot.finish(ev, msg.strip(), at_sender=True)
+             else:
+-                alias_data = [Alias(**_a) for _a in obj]
++                # 确保 obj 中的每个元素都是字典
++                alias_data = [Alias(**_a) for _a in obj if isinstance(_a, dict)]
+     if alias_data:
+         if len(alias_data) != 1:
+             msg = f'找到{len(alias_data)}个相同别名的曲目：\n'
+@@ -218,7 +219,7 @@ async def _(bot: NoneBot, ev: CQEvent):
+     if name.isdigit() and (music := mai.total_list.by_id(name)):
+         await bot.finish(ev, '您要找的是不是：' + (await draw_music_info(music, ev.user_id)), at_sender=True)
+     if search_id := re.search(r'^id([0-9]*)$', name, re.IGNORECASE):
+-        music = music = mai.total_list.by_id(search_id.group(1))
++        music = mai.total_list.by_id(search_id.group(1))
+         await bot.finish(ev, '您要找的是不是：' + (await draw_music_info(music, ev.user_id)), at_sender=True)
+     # 标题
+     result = mai.total_list.filter(title_search=name)
+diff --git a/HoshinoBot/hoshino/modules/maimaiDX/libraries/maimaidx_api_data.py b/HoshinoBot/hoshino/modules/maimaiDX/libraries/maimaidx_api_data.py
+index edea1d9..47b72ce 100644
+--- a/HoshinoBot/hoshino/modules/maimaiDX/libraries/maimaidx_api_data.py
++++ b/HoshinoBot/hoshino/modules/maimaiDX/libraries/maimaidx_api_data.py
+@@ -1,70 +1,60 @@
++import asyncio
+ import json
+ from io import BytesIO
+ from pathlib import Path
+ from typing import Any, List, Optional, Union
+ 
+-from aiohttp import ClientSession, ClientTimeout
++import aiohttp
+ 
+ from .. import config_json, coverdir
+ from .maimaidx_error import *
+ 
+ 
++async def _request(method: str, url: str, **kwargs) -> Any:
++    try:
++        async with aiohttp.ClientSession() as session:
++            async with session.request(method, url, **kwargs) as response:
++                if response.status == 200:
++                    try:
++                        return await asyncio.wait_for(response.json(), timeout=59)
++                    except asyncio.TimeoutError:
++                        print("Request timed out. Retrying...")
++                        return None
++                elif response.status == 400:
++                    raise UserNotFoundError
++                elif response.status == 403:
++                    raise UserDisabledQueryError
++                else:
++                    raise UnknownError
++    except aiohttp.ClientError as e:
++        print(f"Client error occurred: {e}")
++    except Exception as e:
++        print(f"An unexpected error occurred: {e}")
++
++
+ class MaimaiAPI:
+-    
+     MaiAPI = 'https://www.diving-fish.com/api/maimaidxprober'
+     MaiCover = 'https://www.diving-fish.com/covers'
+     MaiAliasAPI = 'https://api.yuzuchan.moe/maimaidx'
+     QQAPI = 'http://q1.qlogo.cn/g'
+-    
++
+     def __init__(self) -> None:
+         self.token = self.load_token()
+         self.headers = {'developer-token': self.token}
+-    
++
+     def load_token(self) -> str:
+         return json.load(open(config_json, 'r', encoding='utf-8'))['token']
+-    
+-    async def _request(self, method: str, url: str, **kwargs) -> Any:
+-        session = ClientSession(timeout=ClientTimeout(total=90))
+-        res = await session.request(method, url, **kwargs)
+ 
+-        data = None
+-        
+-        if self.MaiAPI in url:
+-            if res.status == 200:
+-                data = await res.json()
+-            elif res.status == 400:
+-                raise UserNotFoundError
+-            elif res.status == 403:
+-                raise UserDisabledQueryError
+-            else:
+-                raise UnknownError
+-        elif self.MaiAliasAPI in url:
+-            if res.status == 200:
+-                data = (await res.json())['content']
+-            elif res.status == 400:
+-                raise EnterError
+-            elif res.status == 500:
+-                raise ServerError
+-            else:
+-                raise UnknownError
+-        elif self.QQAPI in url:
+-            if res.status == 200:
+-                data = await res.read()
+-            else:
+-                raise
+-        await session.close()
+-
+-        return data
+-    
+     async def music_data(self):
+         """获取曲目数据"""
+-        return await self._request('GET', self.MaiAPI + '/music_data')
+-    
++        return await _request('GET', self.MaiAPI + '/music_data')
++
+     async def chart_stats(self):
+         """获取单曲数据"""
+-        return await self._request('GET', self.MaiAPI + '/chart_stats')
+-    
+-    async def query_user(self, project: str, *, qqid: Optional[int] = None, username: Optional[str] = None, version: Optional[List[str]] = None):
++        return await _request('GET', self.MaiAPI + '/chart_stats')
++
++    async def query_user(self, project: str, *, qqid: Optional[int] = None, username: Optional[str] = None,
++                         version: Optional[List[str]] = None):
+         """
+         请求用户数据
+         
+@@ -83,8 +73,8 @@ class MaimaiAPI:
+             json['version'] = version
+         if project == 'player':
+             json['b50'] = True
+-        return await self._request('POST', self.MaiAPI + f'/query/{project}', json=json)
+-    
++        return await _request('POST', self.MaiAPI + f'/query/{project}', json=json)
++
+     async def query_user_dev(self, *, qqid: Optional[int] = None, username: Optional[str] = None):
+         """
+         使用开发者接口获取用户数据，请确保拥有和输入了开发者 `token`
+@@ -97,9 +87,10 @@ class MaimaiAPI:
+             params['qq'] = qqid
+         if username:
+             params['username'] = username
+-        return await self._request('GET', self.MaiAPI + f'/dev/player/records', headers=self.headers, params=params)
++        return await _request('GET', self.MaiAPI + f'/dev/player/records', headers=self.headers, params=params)
+ 
+-    async def query_user_dev2(self, *, qqid: Optional[int] = None, username: Optional[str] = None, music_id: Union[str, List[Union[int, str]]]):
++    async def query_user_dev2(self, *, qqid: Optional[int] = None, username: Optional[str] = None,
++                              music_id: Union[str, List[Union[int, str]]]):
+         """
+         使用开发者接口获取用户指定曲目数据，请确保拥有和输入了开发者 `token`
+ 
+@@ -113,40 +104,40 @@ class MaimaiAPI:
+         if username:
+             json['username'] = username
+         json['music_id'] = music_id
+-        return await self._request('POST', self.MaiAPI + f'/dev/player/record', headers=self.headers, json=json)
++        return await _request('POST', self.MaiAPI + f'/dev/player/record', headers=self.headers, json=json)
+ 
+     async def rating_ranking(self):
+         """获取查分器排行榜"""
+-        return await self._request('GET', self.MaiAPI + f'/rating_ranking')
+-        
++        return await _request('GET', self.MaiAPI + f'/rating_ranking')
++
+     async def get_alias(self):
+         """获取所有别名"""
+-        return await self._request('GET', self.MaiAliasAPI + '/maimaidxalias')
+-    
++        return await _request('GET', self.MaiAliasAPI + '/maimaidxalias')
++
+     async def get_songs(self, name: str):
+         """使用别名查询曲目"""
+-        return await self._request('GET', self.MaiAliasAPI + '/getsongs', params={'name': name})
+-    
++        return await _request('GET', self.MaiAliasAPI + '/getsongs', params={'name': name})
++
+     async def get_songs_alias(self, song_id: int):
+         """使用曲目 `id` 查询别名"""
+-        return await self._request('GET', self.MaiAliasAPI + '/getsongsalias', params={'song_id': song_id})
+-    
++        return await _request('GET', self.MaiAliasAPI + '/getsongsalias', params={'song_id': song_id})
++
+     async def get_alias_status(self):
+         """获取当前正在进行的别名投票"""
+-        return await self._request('GET', self.MaiAliasAPI + '/getaliasstatus')
+-    
++        return await _request('GET', self.MaiAliasAPI + '/getaliasstatus')
++
+     async def get_alias_end(self):
+         """获取五分钟内结束的别名投票"""
+-        return await self._request('GET', self.MaiAliasAPI + '/getaliasend')
+-    
++        return await _request('GET', self.MaiAliasAPI + '/getaliasend')
++
+     async def transfer_music(self):
+         """中转查分器曲目数据"""
+-        return await self._request('GET', self.MaiAliasAPI + '/maimaidxmusic')
+-    
++        return await _request('GET', self.MaiAliasAPI + '/maimaidxmusic')
++
+     async def transfer_chart(self):
+         """中转查分器单曲数据"""
+-        return await self._request('GET', self.MaiAliasAPI + '/maimaidxchartstats')
+-    
++        return await _request('GET', self.MaiAliasAPI + '/maimaidxchartstats')
++
+     async def post_alias(self, id: int, aliasname: str, user_id: int):
+         """
+         提交别名申请
+@@ -160,8 +151,8 @@ class MaimaiAPI:
+             'ApplyAlias': aliasname,
+             'ApplyUID': user_id
+         }
+-        return await self._request('POST', self.MaiAliasAPI + '/applyalias', json=json)
+-    
++        return await _request('POST', self.MaiAliasAPI + '/applyalias', json=json)
++
+     async def post_agree_user(self, tag: str, user_id: int):
+         """
+         提交同意投票
+@@ -173,7 +164,7 @@ class MaimaiAPI:
+             'Tag': tag,
+             'AgreeUser': user_id
+         }
+-        return await self._request('POST', self.MaiAliasAPI + '/agreeuser', json=json)
++        return await _request('POST', self.MaiAliasAPI + '/agreeuser', json=json)
+ 
+     async def download_music_pictrue(self, song_id: Union[int, str]) -> Union[Path, BytesIO]:
+         try:
+@@ -188,7 +179,7 @@ class MaimaiAPI:
+                 for _id in [song_id + 10000, song_id - 10000]:
+                     if (file := coverdir / f'{_id}.png').exists():
+                         return file
+-            pic = await self._request('GET', self.MaiCover + f'/{song_id:05d}.png')
++            pic = await _request('GET', self.MaiCover + f'/{song_id:05d}.png')
+             return BytesIO(pic)
+         except CoverError:
+             return coverdir / '11000.png'
+@@ -201,7 +192,7 @@ class MaimaiAPI:
+             'nk': qqid,
+             's': 100
+         }
+-        return await self._request('GET', self.QQAPI, params=params)
++        return await _request('GET', self.QQAPI, params=params)
+ 
+ 
+-maiApi = MaimaiAPI()
+\ No newline at end of file
++maiApi = MaimaiAPI()
+diff --git a/HoshinoBot/hoshino/modules/maimaiDX/libraries/maimaidx_arcade.py b/HoshinoBot/hoshino/modules/maimaiDX/libraries/maimaidx_arcade.py
+index a413c01..5d06c53 100644
+--- a/HoshinoBot/hoshino/modules/maimaiDX/libraries/maimaidx_arcade.py
++++ b/HoshinoBot/hoshino/modules/maimaiDX/libraries/maimaidx_arcade.py
+@@ -1,5 +1,7 @@
+ import json
++import os
+ import time
++
+ import traceback
+ from typing import Dict, List, Optional, Union
+ 
+@@ -9,6 +11,8 @@ from pydantic import BaseModel
+ from .. import arcades_json, loga
+ from .maimaidx_music import writefile
+ 
++os.environ['TZ'] = 'Asia/Shanghai'
++time.tzset()
+ 
+ class Arcade(BaseModel):
+     
+@@ -111,6 +115,8 @@ class ArcadeList(List[Arcade]):
+                 msg += f'    - 平均 {arcade.person / arcade.num:.2f} 人\n'
+             if arcade.by:
+                 msg += f'    - 由 {arcade.by} 更新于 {arcade.time}'
++            else:
++                msg += f'    - 由 某位路过的好心人 更新于 {arcade.time}'
+             result.append(msg.strip())
+         return result
+ 
+@@ -285,18 +291,16 @@ async def update_person(arcadeList: List[Arcade], userName: str, value: str, per
+     if len(arcadeList) == 1:
+         _arcade = arcadeList[0]
+         original_person = _arcade.person
+-        if value in ['+', '＋', '增加', '添加', '加', '来了']:
++        if value in ['++', '+', '＋', '增加', '添加', '加', '来了']:
+             if person > 30:
+                 return '请勿乱玩bot，恼！'
+             _arcade.person += person
+-        elif value in ['-', '－', '减少', '降低', '减', '走了']:
++        elif value in ['--', '-', '－', '减少', '降低', '减', '走了']:
+             if person > 30 or person > _arcade.person:
+                 return '请勿乱玩bot，恼！'
+-            _arcade.person -= person
+-        elif value in ['=', '＝', '设置', '设定', '有']:
++        elif value in ['=', '==', '===', '＝', '设置', '设定', '有']:
+             if abs(_arcade.person - person) > 30:
+                 return '请勿乱玩bot，恼！'
+-            _arcade.person = person
+         if _arcade.person == original_person:
+             return f'人数没有变化\n机厅：{_arcade.name}\n当前人数：{_arcade.person}'
+         else:
+diff --git a/HoshinoBot/hoshino/modules/maimaiDX/libraries/maimaidx_music.py b/HoshinoBot/hoshino/modules/maimaiDX/libraries/maimaidx_music.py
+index d27aa99..b4eb9e4 100644
+--- a/HoshinoBot/hoshino/modules/maimaiDX/libraries/maimaidx_music.py
++++ b/HoshinoBot/hoshino/modules/maimaiDX/libraries/maimaidx_music.py
+@@ -15,7 +15,9 @@ from .maimaidx_model import *
+ from .tool import openfile, writefile
+ 
+ 
+-def cross(checker: Union[List[str], List[float]], elem: Optional[Union[str, float, List[str], List[float], Tuple[float, float]]], diff: List[int]) -> Tuple[bool, List[int]]:
++def cross(checker: Union[List[str], List[float]],
++          elem: Optional[Union[str, float, List[str], List[float], Tuple[float, float]]], diff: List[int]) -> Tuple[
++    bool, List[int]]:
+     ret = False
+     diff_ret = []
+     if not elem or elem is Ellipsis:
+@@ -47,7 +49,8 @@ def cross(checker: Union[List[str], List[float]], elem: Optional[Union[str, floa
+     return ret, diff_ret
+ 
+ 
+-def in_or_equal(checker: Union[str, int], elem: Optional[Union[str, float, List[str], List[float], Tuple[float, float]]]) -> bool:
++def in_or_equal(checker: Union[str, int],
++                elem: Optional[Union[str, float, List[str], List[float], Tuple[float, float]]]) -> bool:
+     if elem is Ellipsis:
+         return True
+     if isinstance(elem, List):
+@@ -59,7 +62,7 @@ def in_or_equal(checker: Union[str, int], elem: Optional[Union[str, float, List[
+ 
+ 
+ class MusicList(List[Music]):
+-    
++
+     def by_id(self, music_id: Union[str, int]) -> Optional[Music]:
+         for music in self:
+             if music.id == str(music_id):
+@@ -73,35 +76,50 @@ class MusicList(List[Music]):
+         return None
+ 
+     @overload
+-    def by_level(self, level: str, byid: bool = False) -> Optional[List[Music]]: ...
++    def by_level(self, level: str, byid: bool = False) -> Optional[List[Music]]:
++        ...
++
+     @overload
+-    def by_level(self, level: List[str], byid: bool = False) -> Optional[List[str]]: ...
++    def by_level(self, level: List[str], byid: bool = False) -> Optional[List[str]]:
++        ...
++
+     def by_level(self, level: Union[str, List[str]], byid: bool = False) -> Optional[Union[List[Music], List[str]]]:
+         if isinstance(level, str):
+             levelList = [music.id if byid else music for music in self if level in music.level]
+         else:
+             levelList = [music.id if byid else music for music in self for lv in level if lv in music.level]
+         return levelList
+-    
++
+     def by_plan(self, level: str) -> Dict[str, Union[PlanInfo, RaMusic, Dict[int, Union[PlanInfo, RaMusic]]]]:
+         lv = {}
+         for music in self.by_level(level):
+             if level in music.level:
+                 count = Counter(music.level)
+                 if count.get(level) > 1:
+-                    lv[music.id] = { n: RaMusic(id=music.id, ds=music.ds[n], lv=str(n), lvp=music.level[n], type=music.type) for n, l in enumerate(music.level) if l == level }
++                    lv[music.id] = {
++                        n: RaMusic(id=music.id, ds=music.ds[n], lv=str(n), lvp=music.level[n], type=music.type) for n, l
++                        in enumerate(music.level) if l == level}
+                 else:
+                     index = music.level.index(level)
+-                    lv[music.id] = RaMusic(id=music.id, ds=music.ds[index], lv=str(index), lvp=music.level[index], type=music.type)
++                    lv[music.id] = RaMusic(id=music.id, ds=music.ds[index], lv=str(index), lvp=music.level[index],
++                                           type=music.type)
+         return lv
+ 
+     @overload
+-    def lvList(self) -> Dict[str, Dict[str, List[Music]]]: ...
++    def lvList(self) -> Dict[str, Dict[str, List[Music]]]:
++        ...
++
+     @overload
+-    def lvList(self, *, rating: Optional[bool] = False) -> Dict[str, Dict[str, List[RaMusic]]]: ...
++    def lvList(self, *, rating: Optional[bool] = False) -> Dict[str, Dict[str, List[RaMusic]]]:
++        ...
++
+     @overload
+-    def lvList(self, *, level: Optional[List[str]] = None, rating: Optional[bool] = False) -> Dict[str, Dict[str, List[RaMusic]]]: ...
+-    def lvList(self, *, level: Optional[List[str]] = None, rating: Optional[bool] = False) -> Dict[str, Dict[str, Union[List[Music], List[RaMusic]]]]:
++    def lvList(self, *, level: Optional[List[str]] = None, rating: Optional[bool] = False) -> Dict[
++        str, Dict[str, List[RaMusic]]]:
++        ...
++
++    def lvList(self, *, level: Optional[List[str]] = None, rating: Optional[bool] = False) -> Dict[
++        str, Dict[str, Union[List[Music], List[RaMusic]]]]:
+         _level = {}
+         if isinstance(level, List):
+             _l = level
+@@ -122,11 +140,12 @@ class MusicList(List[Music]):
+                 for diff, ds in enumerate(music.ds):
+                     if str(ds) in levellist:
+                         if rating:
+-                            levellist[str(ds)].append(RaMusic(id=music.id, ds=ds, lv=str(diff), lvp=music.level[diff], type=music.type))
++                            levellist[str(ds)].append(
++                                RaMusic(id=music.id, ds=ds, lv=str(diff), lvp=music.level[diff], type=music.type))
+                         else:
+                             levellist[str(ds)].append(music)
+             _level[lv] = levellist
+-        return  _level
++        return _level
+ 
+     def by_version(self, version: Union[str, List[str]]) -> Optional[List[Music]]:
+         versionList = []
+@@ -205,7 +224,7 @@ class AliasList(List[Alias]):
+             if music.SongID == int(music_id):
+                 alias_music.append(music)
+         return alias_music
+-    
++
+     def by_alias(self, music_alias: str) -> Optional[List[Alias]]:
+         alias_list = []
+         for music in self:
+@@ -219,15 +238,12 @@ async def get_music_list() -> MusicList:
+     # MusicData
+     try:
+         try:
+-            music_data = await openfile(music_file)
+-            '''
+             music_data = await maiApi.music_data()
+             await writefile(music_file, music_data)
+         except asyncio.exceptions.TimeoutError:
+             log.error('从diving-fish获取maimaiDX曲目数据超时，正在使用yuzuapi中转获取曲目数据')
+             music_data = await maiApi.transfer_music()
+             await writefile(music_file, music_data)
+-'''
+         except UnknownError:
+             log.error('从diving-fish获取maimaiDX曲目数据失败，请检查网络环境。已切换至本地暂存文件')
+             music_data = await openfile(music_file)
+@@ -236,20 +252,18 @@ async def get_music_list() -> MusicList:
+             log.error('maimaiDX曲目数据获取失败，请检查网络环境。已切换至本地暂存文件')
+             music_data = await openfile(music_file)
+     except FileNotFoundError:
+-        log.error(f'未找到文件，请自行使用浏览器访问 "https://www.diving-fish.com/api/maimaidxprober/music_data" 将内容保存为 "music_data.json" 存放在 "static" 目录下并重启bot')
++        log.error(
++            f'未找到文件，请自行使用浏览器访问 "https://www.diving-fish.com/api/maimaidxprober/music_data" 将内容保存为 "music_data.json" 存放在 "static" 目录下并重启bot')
+         raise
+     # ChartStats
+     try:
+         try:
+-            chart_stats = await openfile(chart_file)
+-            '''
+             chart_stats = await maiApi.chart_stats()
+             await writefile(chart_file, chart_stats)
+         except asyncio.exceptions.TimeoutError:
+             log.error('从diving-fish获取maimaiDX数据获取超时，正在使用yuzuapi中转获取单曲数据')
+             chart_stats = await maiApi.transfer_chart()
+             await writefile(chart_file, chart_stats)
+-'''
+         except UnknownError:
+             log.error('从diving-fish获取maimaiDX单曲数据获取错误。已切换至本地暂存文件')
+             chart_stats = await openfile(chart_file)
+@@ -258,19 +272,22 @@ async def get_music_list() -> MusicList:
+             log.error('maimaiDX数据获取错误，请检查网络环境。已切换至本地暂存文件')
+             chart_stats = await openfile(chart_file)
+     except FileNotFoundError:
+-        log.error(f'未找到文件，请自行使用浏览器访问 "https://www.diving-fish.com/api/maimaidxprober/chart_stats" 将内容保存为 "chart_stats.json" 存放在 "static" 目录下并重启bot')
++        log.error(
++            f'未找到文件，请自行使用浏览器访问 "https://www.diving-fish.com/api/maimaidxprober/chart_stats" 将内容保存为 "chart_stats.json" 存放在 "static" 目录下并重启bot')
+         raise
+ 
+     total_list: MusicList = MusicList()
+     for music in music_data:
+         if music['id'] in chart_stats['charts']:
+-            _stats = [_data if _data else None for _data in chart_stats['charts'][music['id']]] if {} in chart_stats['charts'][music['id']] else chart_stats['charts'][music['id']]
++            _stats = [_data if _data else None for _data in chart_stats['charts'][music['id']]] if {} in chart_stats[
++                'charts'][music['id']] else chart_stats['charts'][music['id']]
+         else:
+             _stats = None
+         total_list.append(Music(stats=_stats, **music))
+ 
+     return total_list
+ 
++
+ async def get_music_alias_list() -> AliasList:
+     """获取所有别名"""
+     if local_alias_file.exists():
+@@ -279,19 +296,25 @@ async def get_music_alias_list() -> AliasList:
+         local_alias_data = {}
+     alias_data: List[Dict[str, Union[int, str, List[str]]]] = []
+     try:
+-
+-        alias_data = await openfile(alias_file)
+-        '''
+-        alias_data = await maiApi.get_alias()
+-        await writefile(alias_file, alias_data)
+-        '''
+-    except asyncio.exceptions.TimeoutError:
+-        log.error('获取别名超时。已切换至本地暂存文件')
++    #     response = await maiApi.get_alias()
++    #     if response is None:
++    #         log.error("Failed to fetch alias data: response is None")
++    #         return []
++    #     alias_data = response.get('content', [])
++    #
++    #     # 验证 alias_data 是否为列表
++    #     if not isinstance(alias_data, list):
++    #         log.error(f'获取的别名数据格式不正确，期望为列表，实际为: {type(alias_data)}')
++    #         alias_data = await openfile(alias_file)  # 使用本地文件作为备份
++    #         raise ValueError('Alias data is not a list.')
++    #
++    #     await writefile(alias_file, alias_data)
++    # except asyncio.exceptions.TimeoutError:
++    #     log.error('获取别名超时。已切换至本地暂存文件')
+         alias_data = await openfile(alias_file)
+         if not alias_data:
+-            log.error('本地暂存别名文件为空，请自行使用浏览器访问 "https://api.yuzuchan.moe/maimaidx/maimaidxalias" 获取别名数据并保存在 "static/music_alias.json_bk.bk" 文件中并重启bot')
++            log.error('本地暂存别名文件为空，请自行使用浏览器访问 "https://api.yuzuchan.moe/maimaidx/maimaidxalias" 获取别名数据并保存在 "static/music_alias.json" 文件中并重启bot')
+             raise ValueError
+-
+     except ServerError as e:
+         log.error(e)
+         alias_data = await openfile(alias_file)
+@@ -299,31 +322,18 @@ async def get_music_alias_list() -> AliasList:
+         log.error('获取所有曲目别名信息错误，请检查网络环境。已切换至本地暂存文件')
+         alias_data = await openfile(alias_file)
+         if not alias_data:
+-            log.error('本地暂存别名文件为空，请自行使用浏览器访问 "https://api.yuzuchan.moe/maimaidx/maimaidxalias" 获取别名数据并保存在 "static/music_alias.json_bk.bk" 文件中并重启bot')
++            log.error('本地暂存别名文件为空，请自行使用浏览器访问 "https://api.yuzuchan.moe/maimaidx/maimaidxalias" 获取别名数据并保存在 "static/music_alias.json" 文件中并重启bot')
+             raise ValueError
+-    '''
++
+     total_alias_list = AliasList()
+-    for _a in filter(lambda x: mai.total_list.by_id(x['SongID']), alias_data):
++    for _a in filter(lambda x: isinstance(x, dict) and mai.total_list.by_id(x.get('SongID')), alias_data):
+         if (song_id := str(_a['SongID'])) in local_alias_data:
+             _a['Alias'].extend(local_alias_data[song_id])
+         total_alias_list.append(Alias(**_a))
+ 
+     return total_alias_list
+-    '''
+-
+-    total_alias_list = AliasList()
+ 
+-    # 确保 alias_data 是一个列表
+-    if isinstance(alias_data, list):
+-        for _a in filter(lambda x: isinstance(x, dict) and 'SongID' in x and mai.total_list.by_id(x['SongID']), alias_data):
+-            song_id = str(_a['SongID'])
+-            if song_id in local_alias_data:
+-                _a['Alias'].extend(local_alias_data[song_id])
+-            total_alias_list.append(Alias(**_a))
+-    else:
+-        print("Warning: alias_data is not a list. It might be malformed.")
+ 
+-    return total_alias_list
+ async def update_local_alias(id: str, alias_name: str) -> bool:
+     try:
+         if local_alias_file.exists():
+@@ -340,8 +350,8 @@ async def update_local_alias(id: str, alias_name: str) -> bool:
+         log.error(f'添加本地别名失败: {e}')
+         return False
+ 
+-class MaiMusic:
+ 
++class MaiMusic:
+     total_list: MusicList
+     total_alias_list: AliasList
+     hot_music_ids: List = []
+@@ -370,17 +380,17 @@ class MaiMusic:
+                     self.hot_music_ids.append(music.id)  # 游玩次数超过1w次加入猜歌库
+         self.guess_data = list(filter(lambda x: x.id in self.hot_music_ids, self.total_list))
+ 
++
+ mai = MaiMusic()
+ 
+ 
+ class Guess:
+-
+     Group: Dict[str, Union[GuessDefaultData, GuessPicData]] = {}
+ 
+     def __init__(self) -> None:
+         """猜歌类"""
+         self.config: Dict[str, List[int]] = json.load(open(guess_file, 'r', encoding='utf-8'))
+-    
++
+     async def start(self, gid: str):
+         """开始猜歌"""
+         self.Group[gid] = await self.guessData()
+@@ -453,7 +463,6 @@ guess = Guess()
+ 
+ 
+ class GroupAlias:
+-
+     config: Dict[str, Union[List[int], bool]]
+ 
+     def __init__(self) -> None:
+@@ -483,4 +492,4 @@ class GroupAlias:
+         await writefile(group_alias_file, self.config)
+ 
+ 
+-alias = GroupAlias()
++alias = GroupAlias()
+\ No newline at end of file
+diff --git a/HoshinoBot/hoshino/modules/maimaiDX/maimai_arcade.py b/HoshinoBot/hoshino/modules/maimaiDX/maimai_arcade.py
+index 50ff87a..5eec4e1 100644
+--- a/HoshinoBot/hoshino/modules/maimaiDX/maimai_arcade.py
++++ b/HoshinoBot/hoshino/modules/maimaiDX/maimai_arcade.py
+@@ -8,7 +8,7 @@ from hoshino.typing import CQEvent, MessageSegment
+ from .libraries.image import image_to_base64, text_to_image
+ from .libraries.maimaidx_arcade import *
+ 
+-sv_help= """排卡指令如下：
++sv_help = """排卡指令如下：
+ 添加机厅 <店名> <地址> <机台数量> 添加机厅信息
+ 删除机厅 <店名> 删除机厅信息
+ 修改机厅 <店名> 数量 <数量> ... 修改机厅信息
+@@ -44,10 +44,10 @@ async def add_arcade(bot: NoneBot, ev: CQEvent):
+     if not priv.check_priv(ev, priv.SUPERUSER):
+         msg = '仅允许主人添加机厅\n请使用 来杯咖啡+内容 联系主人'
+     elif len(args) == 1 and args[0] in ['帮助', 'help', '指令帮助']:
+-        msg = '添加机厅指令格式：添加机厅 <店名> <位置> <机台数量> <别称1> <别称2> ...'
++        msg = '添加机厅指令格式：添加机厅 <店名> <位置> [别称1] [别称2] ...'
+     elif len(args) >= 3:
+         if not args[2].isdigit():
+-            msg = '格式错误：添加机厅 <店名> <地址> <机台数量> [别称1] [别称2] ...'
++            msg = '格式错误：添加机厅 <店名> <地址> [别称1] [别称2] ...'
+         else:
+             if not arcade.total.search_fullname(args[0]):
+                 aid = sorted(arcade.idList, reverse=True)
+@@ -66,7 +66,8 @@ async def add_arcade(bot: NoneBot, ev: CQEvent):
+                     'group': [],
+                     'person': 0,
+                     'by': '',
+-                    'time': ''
++                    'time': '',
++                    'arcades': []
+                 }
+                 arcade.total.add_arcade(arcade_dict)
+                 await arcade.total.save_arcade()
+@@ -79,6 +80,27 @@ async def add_arcade(bot: NoneBot, ev: CQEvent):
+     await bot.send(ev, msg, at_sender=True)
+ 
+ 
++@sv_arcade.on_prefix(['添加机台'])
++async def add_arcades_arcade(bot: NoneBot, ev: CQEvent):
++    args: List[str] = ev.message.extract_plain_text().strip().split()
++    if not priv.check_priv(ev, priv.SUPERUSER):
++        msg = '仅允许主人添加机台\n请使用 来杯咖啡+内容 联系主人'
++    elif len(args) == 1 and args[0] in ['帮助', 'help', '指令帮助']:
++        msg = '添加机台指令格式：添加机台 <店名> <机台名> <机台数量> <机台1别称> <机台2别称> ... <机台n别称>...'
++    elif len(args) >= 3:
++        if not args[2].isdigit():
++            msg = '格式错误：添加机台 <店名> <机台名> <机台数量> <机台1别称> <机台2别称> ... <机台n别称>...'
++        else:
++            if not args[0].isdigit() and len(_arc := arcade.total.search_fullname(args[0])) > 1:
++                msg = '找到多个相同店名的机厅，请使用店铺ID修改机厅\n' + '\n'.join([f'{_.id}：{_.name}' for _ in _arc])
++            elif args[1] == '数量' and len(args) == 3 and args[2].isdigit():
++                msg = await updata_arcade(args[0], args[2])
++    else:
++        msg = '格式错误：添加机台 <店名> <机台名> <机台数量> <机台1别称> <机台2别称> ... <机台n别称>...'
++
++    await bot.send(ev, msg, at_sender=True)
++
++
+ @sv_arcade.on_prefix(['删除机厅', '移除机厅'])
+ async def delele_arcade(bot: NoneBot, ev: CQEvent):
+     name = ev.message.extract_plain_text().strip()
+@@ -103,7 +125,7 @@ async def _(bot: NoneBot, ev: CQEvent):
+     if len(args) != 2:
+         msg = '格式错误：添加/删除机厅别名 <店名> <别名>'
+     elif not args[0].isdigit() and len(_arc := arcade.total.search_fullname(args[0])) > 1:
+-        msg = '找到多个相同店名的机厅，请使用店铺ID更改机厅别名\n' + '\n'.join([ f'{_.id}：{_.name}' for _ in _arc ])
++        msg = '找到多个相同店名的机厅，请使用店铺ID更改机厅别名\n' + '\n'.join([f'{_.id}：{_.name}' for _ in _arc])
+     else:
+         msg = await update_alias(args[0], args[1], a)
+     await bot.send(ev, msg, at_sender=True)
+@@ -115,12 +137,12 @@ async def modify_arcade(bot: NoneBot, ev: CQEvent):
+     if not priv.check_priv(ev, priv.ADMIN):
+         msg = '仅允许管理员修改机厅信息'
+     elif not args[0].isdigit() and len(_arc := arcade.total.search_fullname(args[0])) > 1:
+-        msg = '找到多个相同店名的机厅，请使用店铺ID修改机厅\n' + '\n'.join([ f'{_.id}：{_.name}' for _ in _arc ])
++        msg = '找到多个相同店名的机厅，请使用店铺ID修改机厅\n' + '\n'.join([f'{_.id}：{_.name}' for _ in _arc])
+     elif args[1] == '数量' and len(args) == 3 and args[2].isdigit():
+         msg = await updata_arcade(args[0], args[2])
+     else:
+         msg = '格式错误：修改机厅 <店名> [数量] <数量>'
+-    
++
+     await bot.send(ev, msg, at_sender=True)
+ 
+ 
+@@ -133,10 +155,10 @@ async def _(bot: NoneBot, ev: CQEvent):
+     if not priv.check_priv(ev, priv.ADMIN):
+         msg = '仅允许管理员订阅和取消订阅'
+     elif not name.isdigit() and len(_arc := arcade.total.search_fullname(name)) > 1:
+-        msg = f'找到多个相同店名的机厅，请使用店铺ID订阅\n' + '\n'.join([ f'{_.id}：{_.name}' for _ in _arc ])
++        msg = f'找到多个相同店名的机厅，请使用店铺ID订阅\n' + '\n'.join([f'{_.id}：{_.name}' for _ in _arc])
+     else:
+         msg = await subscribe(gid, name, sub)
+-    
++
+     await bot.send(ev, msg, at_sender=True)
+ 
+ 
+@@ -178,7 +200,8 @@ async def search_arcade(bot: NoneBot, ev: CQEvent):
+         await bot.send(ev, '没有这样的机厅哦', at_sender=True)
+ 
+ 
+-@sv_arcade.on_rex(r'^(.+)?\s?(设置|设定|＝|=|有|增加|添加|加|来了|＋|\+|减少|降低|减|走了|－|-)\s?([0-9]+|＋|\+|－|-)(人|卡)?$')
++@sv_arcade.on_rex(
++    r'^(.+)?\s?(设置|设定|＝|=|有|增加|添加|加|来了|＋|\+|减少|降低|减|走了|－|-)\s?([0-9]+|＋|\+|－|-)(人|卡)?$')
+ async def arcade_person(bot: NoneBot, ev: CQEvent):
+     try:
+         match: Match[str] = ev['match']
+@@ -248,12 +271,23 @@ async def arcade_card(bot: NoneBot, ev: CQEvent):
+                 msg = '已订阅的机厅中未找到该机厅'
+             else:
+                 msg = await update_person(_arcade, nickname, value, 1)
+-
+-            await bot.send(ev, msg, at_sender=True)
++                await bot.send(ev, msg, at_sender=True)
+     except:
+         pass
+ 
+ 
++@sv_arcade.on_fullmatch(['自动清零', '清零'])
++async def arcade_clear(bot: NoneBot, ev: CQEvent):
++    if not priv.check_priv(ev, priv.SUPERUSER):
++        msg = '仅允许主人添加机厅\n请使用 来杯咖啡+内容 联系主人'
++    else:
++        gid = ev.group_id
++        arcade_list = arcade.total.group_subscribe_arcade(group_id=gid)
++        if arcade_list:
++            msg = await update_person(arcade_list, "自动清零bot", '=', 0)
++            await bot.send(ev, msg, at_sender=True)
++
++
+ @sv_arcade.on_fullmatch(['机厅几人', 'jtj', 'j', 'jk'])
+ async def arcade_query_multiple(bot: NoneBot, ev: CQEvent):
+     gid = ev.group_id
+diff --git a/HoshinoBot/hoshino/util/textfilter/sensitive_words.txt b/HoshinoBot/hoshino/util/textfilter/sensitive_words.txt
+index 08665e1..e404ab2 100644
+--- a/HoshinoBot/hoshino/util/textfilter/sensitive_words.txt
++++ b/HoshinoBot/hoshino/util/textfilter/sensitive_words.txt
+@@ -16450,3 +16450,4 @@ YAGOO
+ Tanigou
+ Motoaki
+ 斯哈斯哈
++奶龙
+\ No newline at end of file

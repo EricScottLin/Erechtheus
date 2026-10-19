@@ -1,0 +1,65 @@
+# ============================================================
+#  NoneBot2 业务层镜像
+#
+#  说明：
+#   - 两个插件（maimaidx / bilibili）都依赖 playwright 渲染图片，
+#     故安装 Chromium 及所需系统库。
+#   - 代码与配置通过 docker-compose 的 volume 挂载覆盖，
+#     改插件/配置只需 docker compose restart nonebot，无需重建镜像；
+#     新增/升级 Python 依赖才需要 rebuild。
+# ============================================================
+FROM python:3.10-slim
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    TZ=Asia/Shanghai
+
+# 系统依赖：playwright/chromium 运行库 + pillow + 编译兜底
+RUN set -eux; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends \
+        tzdata \
+        curl \
+        wget \
+        ffmpeg \
+        fonts-noto-cjk \
+        fonts-noto-color-emoji \
+        libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 libcups2 \
+        libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 \
+        libxrandr2 libgbm1 libpango-1.0-0 libcairo2 libasound2 \
+        libatspi2.0-0 libx11-6 libxcb1 libxext6 libxrender1 \
+        libjpeg62-turbo libpng16-16 libwebp7 libtiff6 libfreetype6 \
+        libglib2.0-0 libdbus-1-3 libexpat1 libffi8; \
+    rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# 先装依赖（利用层缓存：依赖不变则不重装）
+COPY pyproject.toml ./
+RUN set -eux; \
+    pip install --upgrade pip; \
+    pip install . ; \
+    pip install nonebot-plugin-maimaidx nonebot-plugin-localstore ; \
+    pip install nonebot-plugin-rollpig-plus ; \
+    playwright install --with-deps chromium; \
+    playwright install-deps chromium || true
+
+# 本地插件（vendored，随镜像一起构建，改代码后需 rebuild）
+#   plugins/nonebot_plugin_bilibili  B站视频解析（来自 GreaterLG70/nonebot-plugin-bilibili）
+#   plugins/qqbot_toolbox           基础命令工具箱
+#   plugins/qqbot_economy           签到金币 + 捕鱼
+# 说明：B站插件之所以 vendoring 而非 pip install，是因为 PyPI 上的
+# nonebot-plugin-bilibili 是 mengbingnaixi 的「动态订阅」插件，与我们要的
+# 「视频解析」插件同名不同物，直接 pip 会装错。源码放在 plugins/ 下由
+# bot.py 用 Path 加载，同时避开包名冲突。
+COPY plugins/ ./plugins/
+
+# 入口
+COPY bot.py ./
+COPY .env.prod ./
+
+EXPOSE 8080
+
+CMD ["python", "bot.py"]

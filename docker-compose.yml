@@ -1,0 +1,88 @@
+# ============================================================
+#  QQ 机器人统一编排：LLBot(接入层) + NoneBot2(业务层)
+#
+#  设计要点（对应部署要求）：
+#   1. LLBot 无头模式 = PROTOCOL_MODE=direct（纯 NTQQ 协议，不需要 QQ 客户端）。
+#      注意：v8.x 起 Docker 镜像没有 --headless 参数，无头是默认 direct 模式。
+#   2. 数据持久化：宿主机 bind mount ${LLBOT_DATA_DIR} -> /app/llbot/data
+#   3. 网络安全：两个容器都用 host 网络模式，LLBot 的 WebUI 与 OneBot WS
+#      由配置文件强制绑定 127.0.0.1，公网不可探测；不发布任何端口。
+#   4. AUTO_LOGIN_QQ 实现重启免扫码。
+# ============================================================
+
+services:
+
+  # ---------------- 接入层：LLBot ----------------
+  llbot:
+    image: ${LLBOT_IMAGE:-linyuchen/llbot:8.3.2}
+    container_name: ${COMPOSE_PROJECT_NAME:-qqbot}-llbot
+    # host 网络：容器直接使用宿主机网络栈。
+    # 好处 —— LLBot 配置里的 127.0.0.1 就是宿主的 127.0.0.1，
+    #         NoneBot 用 ws://127.0.0.1:3001 即可直连，无需端口映射。
+    # 安全 —— 因为绑定的是回环，公网完全探测不到。
+    network_mode: host
+    restart: unless-stopped
+    environment:
+      # 无头（direct）模式：不设即为 direct；显式写出以防上游默认值变化
+      PROTOCOL_MODE: direct
+      # 重启后自动恢复该 QQ 登录，免扫码（对应验收标准）
+      AUTO_LOGIN_QQ: ${LLBOT_QQ:-}
+      # LuckyLillia Auth Token（无它无头模式无法登录）
+      AUTH_TOKEN: ${LLBOT_AUTH_TOKEN:-}
+      # WebUI 端口（startup.sh 会按此改 default_config.json；
+      # 但实际生效的是 data/config_<QQ>.json，由 scripts/gen-llbot-config.sh 生成）
+      WEBUI_PORT: ${LLBOT_WEBUI_PORT:-3081}
+      TZ: ${TZ:-Asia/Shanghai}
+    volumes:
+      # 持久化：登录态 / session / 配置 / 日志 / 数据库
+      - ${LLBOT_DATA_DIR:-./llbot-data}:/app/llbot/data:rw
+    healthcheck:
+      # 镜像基于 debian/alpine slim，无 curl；用 node 自带 fetch 探 WebUI
+      test:
+        - CMD-SHELL
+        - node -e "fetch('http://127.0.0.1:'+(process.env.WEBUI_PORT||3081)).then(()=>process.exit(0),()=>process.exit(1))"
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # ---------------- 业务层：NoneBot2 ----------------
+  nonebot:
+    build:
+      context: .
+      dockerfile: Dockerfile.nonebot
+    container_name: ${COMPOSE_PROJECT_NAME:-qqbot}-nonebot
+    network_mode: host
+    restart: unless-stopped
+    depends_on:
+      llbot:
+        condition: service_started
+    env_file:
+      - .env
+    environment:
+      # NoneBot 环境标识：prod 时读取 .env.prod（缺省回退 .env）
+      ENVIRONMENT: ${ENVIRONMENT:-prod}
+      # NoneBot 内置 HTTP 服务（fastapi driver，bilibili 插件依赖）
+      HOST: ${NONE_HOST:-127.0.0.1}
+      PORT: ${NONE_PORT:-8080}
+      # 适配器：NoneBot 作为 WS 客户端连 LLBot 的正向 WS。
+      # 真实配置在 .env.prod（ONEBOT_WS_URLS / ONEBOT_ACCESS_TOKEN），
+      # 因为 NoneBot 里 .env.prod 的优先级高于容器环境变量。
+      # 注意：适配器只认 ONEBOT_WS_URLS（完整 URL 的 JSON 数组），
+      # 不存在 ONEBOT_WS_HOST / ONEBOT_WS_PORT 配置项。
+      TZ: ${TZ:-Asia/Shanghai}
+    volumes:
+      # 代码热更新：改插件/配置后 docker compose restart nonebot 即可，无需重建镜像
+      - ./bot.py:/app/bot.py:ro
+      - ./pyproject.toml:/app/pyproject.toml:ro
+      - ./.env.prod:/app/.env.prod:ro
+      # 本地插件目录（bot.py 用 Path("plugins/...") 加载）
+      - ./plugins:/app/plugins:ro
+      # 舞萌DX查分插件的静态资源（对应 .env.prod 的 MAIMAIDX_PATH=/static）
+      # 注意：必须可写（rw）。maimaidx 把可变状态（user.db、群开关、别名缓存）
+      # 放在 static/data 下，见插件 resources.py: data_dir = static / "data"。
+      # 挂成 ro 会在启动时报 sqlite3.OperationalError: unable to open database file
+      - ./maimaidx-static/static:/static:rw
+      # 插件运行时数据（LOCALSTORE_USE_CWD=true 时 localstore 落在 /app/data）。
+      # 必须挂出来，否则容器重建后签到记录、金币、捕鱼进度全部丢失
+      - ./data:/app/data:rw
