@@ -175,7 +175,8 @@ async def _(bot: Bot, event: MessageEvent):
         plugin_config.qqbot_core_claim_enabled
     )
     if not enabled:
-        await claim_cmd.finish("🎐 领金币活动尚未开放（或已结束）")
+        hint = "\n（bot 主可用 /领金币开关 on 开启）" if _is_owner(event) else ""
+        await claim_cmd.finish(f"🎐 领金币活动尚未开放（或已结束）{hint}")
 
     uid = event.get_user_id()
 
