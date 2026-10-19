@@ -184,7 +184,11 @@ async def update_section(
 
 async def all_users() -> dict[str, dict[str, Any]]:
     async with _lock:
-        return json.loads(json.dumps(_load(), ensure_ascii=False))
+        data = _load()
+        for user in data.values():
+            _ensure(user)  # 补齐新增代币等字段（老数据兼容）
+        _save()
+        return json.loads(json.dumps(data, ensure_ascii=False))
 
 
 # ---------------------------------------------------------------- 全局运行时设置

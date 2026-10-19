@@ -20,11 +20,13 @@
 from dataclasses import dataclass, field
 
 # ---------------------------------------------------------------- 分层
+LAYER_GAME = 0  # 玩法代币：只在单一玩法内循环，不进主经济
 LAYER_HARD = 1  # 高级代币：稀缺、不可农
 LAYER_SOFT = 2  # 软通货：主要交易媒介
 LAYER_PRESTIGE = 3  # 荣誉代币：日活、不可消费
 
 LAYER_NAMES = {
+    LAYER_GAME: "玩法代币",
     LAYER_HARD: "高级代币",
     LAYER_SOFT: "软通货",
     LAYER_PRESTIGE: "荣誉代币",
@@ -63,6 +65,16 @@ CURRENCIES: dict[str, CurrencySpec] = {
         layer=LAYER_SOFT,
         name="月币",
         symbol="🌙",
+        consumable=True,
+        faucet="每日签到（随机 10~60）+ 限时活动 /领金币",
+        faucet_cap="签到 1 次/天；活动每人一次",
+        sinks=("科技 bot 操作", "限定商品", "后续商店"),  # R5：≥3（规划中）
+    ),
+    "fishcoin": CurrencySpec(
+        key="fishcoin",
+        layer=LAYER_GAME,
+        name="鱼币",
+        symbol="🐟",
         consumable=True,
         faucet="捕鱼（60s 冷却）",
         faucet_cap="1440 次/天；R 10~150 · SR 50~400 · SSR 450~999",
@@ -160,8 +172,11 @@ class EconomyMetrics:
     total_drachma_minted: int = 0
     total_drachma_spent: int = 0
     total_kleos_minted: int = 0
+    total_fishcoin_minted: int = 0
+    total_fishcoin_spent: int = 0
     active_users: int = 0
     drachma_in_circulation: int = 0
+    fishcoin_in_circulation: int = 0
     notes: list[str] = field(default_factory=list)
 
 
@@ -177,7 +192,10 @@ def compute_metrics(users: dict[str, dict]) -> EconomyMetrics:
         m.total_drachma_minted += int(u.get("total_drachma_earned", 0))
         m.total_drachma_spent += int(u.get("total_drachma_spent", 0))
         m.total_kleos_minted += int(u.get("total_kleos_earned", 0))
+        m.total_fishcoin_minted += int(u.get("total_fishcoin_earned", 0))
+        m.total_fishcoin_spent += int(u.get("total_fishcoin_spent", 0))
         m.drachma_in_circulation += int(u.get("drachma", 0))
+        m.fishcoin_in_circulation += int(u.get("fishcoin", 0))
 
     if m.total_drachma_minted > 0:
         burn_ratio = m.total_drachma_spent / m.total_drachma_minted
@@ -194,8 +212,8 @@ def validate_registry() -> list[str]:
     """启动时自检，违反规范即刻暴露。返回问题列表，空列表表示通过。"""
     problems: list[str] = []
 
-    # R1：层数不超 3
-    layers = {c.layer for c in CURRENCIES.values()}
+    # R1：主经济层数不超 3（LAYER_GAME 玩法代币不计入）
+    layers = {c.layer for c in CURRENCIES.values() if c.layer >= LAYER_HARD}
     if len(layers) > 3:
         problems.append(f"R1 违反：层数 {len(layers)} > 3")
 
@@ -204,7 +222,7 @@ def validate_registry() -> list[str]:
     for c in CURRENCIES.values():
         seen.setdefault(c.layer, []).append(c.key)
     for layer, keys in seen.items():
-        if len(keys) > 1:
+        if layer >= LAYER_HARD and len(keys) > 1:
             problems.append(f"R2 违反：L{layer} 存在多个代币 {keys}")
 
     # R5：可消费代币须 ≥3 sink

@@ -25,11 +25,11 @@ class Config(BaseModel):
     qqbot_economy_sign_streak_max: int = Field(
         default=30, ge=1, description="连签奖励计算的最大天数"
     )
-    qqbot_economy_sign_drachma_ratio: float = Field(
-        default=0.10,
-        ge=0.0,
-        le=1.0,
-        description="签到附带月币比例（本次荣耀 × 比例，0 = 不给月币）",
+    qqbot_economy_sign_drachma_min: int = Field(
+        default=10, ge=0, description="签到附带月币的最小值（随机区间）"
+    )
+    qqbot_economy_sign_drachma_max: int = Field(
+        default=60, ge=0, description="签到附带月币的最大值（随机区间，0 = 不给月币）"
     )
     qqbot_economy_kleos_per_level: int = Field(
         default=1000, ge=1, description="每升一级声望所需累计荣耀"

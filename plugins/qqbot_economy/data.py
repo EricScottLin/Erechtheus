@@ -46,15 +46,12 @@ DEFAULTS: dict[str, Any] = {
     "last_fish_ts": 0.0,
 }
 
-# 这些字段属于钱包，禁止通过 update_user 直接改（必须走 earn/spend）
-WALLET_FLAT_KEYS = {
-    "kleos",
-    "drachma",
-    "total_kleos_earned",
-    "total_drachma_earned",
-    "total_drachma_spent",
-    "total_kleos_spent",
-}
+def _wallet_keys() -> set[str]:
+    """所有代币的扁平字段（余额 + 累计），禁止通过 update_user 直接改。"""
+    keys: set[str] = set()
+    for key in require_core().currency.CURRENCIES:
+        keys |= {key, f"total_{key}_earned", f"total_{key}_spent"}
+    return keys
 
 
 def require_core():
@@ -66,15 +63,14 @@ def require_core():
 
 
 def _flatten(nested: dict[str, Any], gameplay: dict[str, Any]) -> dict[str, Any]:
-    """把 qqbot_core 的嵌套用户结构拍平成经济插件习惯的扁平结构。"""
+    """把 qqbot_core 的嵌套用户结构拍平成经济插件习惯的扁平结构（支持任意代币）。"""
     out = dict(gameplay)
     wallet = nested["wallet"]
-    for key in ("kleos", "drachma"):
-        out[key] = int(wallet[key]["balance"])
-    out["total_kleos_earned"] = int(wallet["kleos"]["total_earned"])
-    out["total_drachma_earned"] = int(wallet["drachma"]["total_earned"])
-    out["total_drachma_spent"] = int(wallet["drachma"]["total_spent"])
-    out["total_kleos_spent"] = int(wallet["kleos"]["total_spent"])
+    for key in require_core().currency.CURRENCIES:
+        w = wallet.get(key) or {"balance": 0, "total_earned": 0, "total_spent": 0}
+        out[key] = int(w["balance"])
+        out[f"total_{key}_earned"] = int(w["total_earned"])
+        out[f"total_{key}_spent"] = int(w["total_spent"])
     return out
 
 
@@ -87,7 +83,7 @@ async def get_user(user_id: str) -> dict[str, Any]:
 
 async def update_user(user_id: str, **fields: Any) -> dict[str, Any]:
     """更新玩法字段并落盘，返回最新数据。货币字段请走 earn/spend。"""
-    bad = {k for k in fields if k in WALLET_FLAT_KEYS}
+    bad = {k for k in fields if k in _wallet_keys()}
     if bad:
         raise KeyError(f"货币字段不能直接 update：{bad}，请使用 earn/spend")
     await require_core().storage.update_section(user_id, SECTION, **fields)

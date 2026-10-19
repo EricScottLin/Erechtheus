@@ -63,6 +63,7 @@ plugin_config = get_plugin_config(Config)
 
 KLEOS = "kleos"
 DRACHMA = "drachma"
+FISHCOIN = "fishcoin"
 
 
 def _yesterday_str() -> str:
@@ -95,8 +96,15 @@ async def handle_sign(event: MessageEvent) -> None:
         user["sign_streak"] + 1 if user["last_sign_in"] == _yesterday_str() else 1
     )
     kleos = cur.kleos_for_sign_in(streak)
-    # 签到也给少量月币：荣耀是身份，月币才是主要消耗品（比例可配）
-    drachma = int(kleos * plugin_config.qqbot_economy_sign_drachma_ratio)
+    # 签到给随机少量月币：月币走固定途径、少量发放，捕鱼产出的是独立鱼币
+    if plugin_config.qqbot_economy_sign_drachma_max > 0:
+        lo = min(
+            plugin_config.qqbot_economy_sign_drachma_min,
+            plugin_config.qqbot_economy_sign_drachma_max,
+        )
+        drachma = random.randint(lo, plugin_config.qqbot_economy_sign_drachma_max)
+    else:
+        drachma = 0
 
     user = await earn(
         uid,
@@ -150,7 +158,7 @@ async def handle_panel(event: MessageEvent) -> None:
         f"{cur.fmt(KLEOS, u['kleos'])}   累计 {u['total_kleos_earned']:,}",
         f"签到       连续 {u['sign_streak']} 天 · 共 {u['total_sign_days']} 天",
         "────────────────",
-        f"{cur.fmt(DRACHMA, u['drachma'])}",
+        f"{cur.fmt(DRACHMA, u['drachma'])} · {cur.fmt(FISHCOIN, u['fishcoin'])}",
         f"鱼竿       Lv.{u['rod_level']}/{cur.ROD_MAX_LEVEL}"
         f"（升级需 {cur.rod_upgrade_price(u['rod_level']) or '已满级'}）",
         f"鱼饵       {u['bait']} 个",
@@ -202,7 +210,7 @@ async def handle_fish(event: MessageEvent) -> None:
 
     u = await earn(
         uid,
-        DRACHMA,
+        FISHCOIN,
         fish.drachma,
         total_fish=u["total_fish"] + 1,
         fish_count=fc,
@@ -216,7 +224,7 @@ async def handle_fish(event: MessageEvent) -> None:
         "🎣 你一网撒下去——",
         f"{RARITY_COLOR[fish.rarity]} 捕获 {RARITY_LABEL[fish.rarity]} {fish.name}！",
         f"  {fish.detail}",
-        f"  卖出换得 {cur.fmt(DRACHMA, fish.drachma)}"
+        f"  卖出换得 {cur.fmt(FISHCOIN, fish.drachma)}"
         + (f"，经验 +{fish.exp}" if fish.exp else ""),
     ]
     if use_bait:
@@ -237,12 +245,12 @@ async def handle_shop(event: MessageEvent) -> None:
     lines = [
         "⚖️ 雅典港集市",
         "────────────────",
-        f"[1] 鱼饵 ×1      {cur.fmt(DRACHMA, plugin_config.qqbot_economy_bait_price)}",
+        f"[1] 鱼饵 ×1      {cur.fmt(FISHCOIN, plugin_config.qqbot_economy_bait_price)}",
         f"    下次捕鱼稀有度权重 +{plugin_config.qqbot_economy_bait_bonus:.0%}",
     ]
     if rod_price:
         lines += [
-            f"[2] 鱼竿升级    {cur.fmt(DRACHMA, rod_price)}",
+            f"[2] 鱼竿升级    {cur.fmt(FISHCOIN, rod_price)}",
             f"    Lv.{u['rod_level']} → Lv.{u['rod_level'] + 1}，"
             f"SR/SSR 出货权重 +{ROD_RARITY_BOOST_PER_LEVEL:.0%}",
         ]
@@ -252,8 +260,8 @@ async def handle_shop(event: MessageEvent) -> None:
     lines += [
         "────────────────",
         "抽奖（高价值，负期望）：",
-        f"  单抽 {cur.GACHA_SINGLE} · 十连 {cur.GACHA_TEN} · 百连 {cur.GACHA_HUNDRED} 月币",
-        f"你的资产：{cur.fmt(DRACHMA, u['drachma'])}",
+        f"  单抽 {cur.GACHA_SINGLE} · 十连 {cur.GACHA_TEN} · 百连 {cur.GACHA_HUNDRED} 鱼币",
+        f"你的资产：{cur.fmt(FISHCOIN, u['fishcoin'])}",
         "用法：/购买 1   或   /单抽",
     ]
     await shop.finish("\n".join(lines))
@@ -274,9 +282,9 @@ async def handle_buy(event: MessageEvent, arg: Message = CommandArg()) -> None:
     if item == "1":
         price = plugin_config.qqbot_economy_bait_price
         u = await get_user(uid)
-        r = await spend(uid, DRACHMA, price, bait=u["bait"] + 1)
+        r = await spend(uid, FISHCOIN, price, bait=u["bait"] + 1)
         if r is None:
-            await buy.finish(f"月币 不足，需要 {cur.fmt(DRACHMA, price)}")
+            await buy.finish(f"鱼币 不足，需要 {cur.fmt(FISHCOIN, price)}")
         await buy.finish(f"买到 1 个鱼饵，现有 {r['bait']} 个")
 
     elif item == "2":
@@ -284,9 +292,9 @@ async def handle_buy(event: MessageEvent, arg: Message = CommandArg()) -> None:
         price = cur.rod_upgrade_price(u["rod_level"])
         if price == 0:
             await buy.finish("鱼竿已满级，去抽奖吧")
-        r = await spend(uid, DRACHMA, price, rod_level=u["rod_level"] + 1)
+        r = await spend(uid, FISHCOIN, price, rod_level=u["rod_level"] + 1)
         if r is None:
-            await buy.finish(f"月币 不足，升级需要 {cur.fmt(DRACHMA, price)}")
+            await buy.finish(f"鱼币 不足，升级需要 {cur.fmt(FISHCOIN, price)}")
         await buy.finish(f"鱼竿升到 Lv.{r['rod_level']}！稀有度出货权重提升")
 
     else:
@@ -296,26 +304,26 @@ async def handle_buy(event: MessageEvent, arg: Message = CommandArg()) -> None:
 # ---------------------------------------------------------------- 抽奖
 # 负期望设计（规范 §6 缓解措施 #1）：投入 100，期望回收约 57.5 月币
 _GACHA_PRIZES = (
-    (0.60, DRACHMA, 20, "小补偿"),
-    (0.25, DRACHMA, 50, "略有收获"),
+    (0.60, FISHCOIN, 20, "小补偿"),
+    (0.25, FISHCOIN, 50, "略有收获"),
     (0.10, "bait", 1, "鱼饵 ×1"),
-    (0.04, DRACHMA, 300, "手气不错"),
-    (0.01, DRACHMA, 2000, "🎉 海神庇佑！"),
+    (0.04, FISHCOIN, 300, "手气不错"),
+    (0.01, FISHCOIN, 2000, "🎉 海神庇佑！"),
 )
 
 
 def _gacha_expected_value() -> float:
     ev = 0.0
     for p, kind, value, _ in _GACHA_PRIZES:
-        ev += p * (value if kind == DRACHMA else plugin_config.qqbot_economy_bait_price)
+        ev += p * (value if kind == FISHCOIN else plugin_config.qqbot_economy_bait_price)
     return ev
 
 
 async def _do_gacha(uid: str, times: int, total_cost: int) -> str:
     u = await get_user(uid)
-    r = await spend(uid, DRACHMA, total_cost)
+    r = await spend(uid, FISHCOIN, total_cost)
     if r is None:
-        return f"月币 不足，需要 {cur.fmt(DRACHMA, total_cost)}"
+        return f"鱼币 不足，需要 {cur.fmt(FISHCOIN, total_cost)}"
     u = r
 
     total_back = 0
@@ -328,7 +336,7 @@ async def _do_gacha(uid: str, times: int, total_cost: int) -> str:
         for p, kind, value, label in _GACHA_PRIZES:
             acc += p
             if roll < acc:
-                if kind == DRACHMA:
+                if kind == FISHCOIN:
                     total_back += value
                     if value > best_value:
                         best_value, best_label = value, label
@@ -336,18 +344,18 @@ async def _do_gacha(uid: str, times: int, total_cost: int) -> str:
                     got_bait += value
                 break
 
-    u = await earn(uid, DRACHMA, total_back, bait=u["bait"] + got_bait)
+    u = await earn(uid, FISHCOIN, total_back, bait=u["bait"] + got_bait)
 
     net = total_back + got_bait * plugin_config.qqbot_economy_bait_price - total_cost
     lines = [
-        f"🎲 抽奖 {times} 次，花费 {cur.fmt(DRACHMA, total_cost)}",
-        f"回收 {cur.fmt(DRACHMA, total_back)}"
+        f"🎲 抽奖 {times} 次，花费 {cur.fmt(FISHCOIN, total_cost)}",
+        f"回收 {cur.fmt(FISHCOIN, total_back)}"
         + (f" + 鱼饵 ×{got_bait}" if got_bait else ""),
         f"净{'赚' if net >= 0 else '亏'} {abs(net)} 月币",
     ]
     if best_label:
         lines.append(f"最大奖：{best_label}")
-    lines.append(f"当前 {cur.fmt(DRACHMA, u['drachma'])}")
+    lines.append(f"当前 {cur.fmt(FISHCOIN, u['fishcoin'])}")
     return "\n".join(lines)
 
 
@@ -400,6 +408,9 @@ async def handle_econ() -> None:
         f"月币 累计铸造 {m.total_drachma_minted:,}",
         f"月币 累计销毁 {m.total_drachma_spent:,}",
         f"月币 当前流通 {m.drachma_in_circulation:,}",
+        f"鱼币 累计铸造 {m.total_fishcoin_minted:,}",
+        f"鱼币 累计销毁 {m.total_fishcoin_spent:,}",
+        f"鱼币 当前流通 {m.fishcoin_in_circulation:,}",
     ]
     if m.notes:
         lines.append("────────────────")
@@ -409,7 +420,7 @@ async def handle_econ() -> None:
         "────────────────",
         f"抽奖期望回收    {ev:.1f} / 投入 {cur.GACHA_SINGLE}"
         f"（负期望 {1 - ev / cur.GACHA_SINGLE:.1%}）",
-        f"鱼竿满级总成本  {cur.rod_max_total_cost():,} 月币",
+        f"鱼竿满级总成本  {cur.rod_max_total_cost():,} 鱼币",
         "完整规范见 docs/CURRENCY_SPEC.md",
     ]
     await econ.finish("\n".join(lines))
