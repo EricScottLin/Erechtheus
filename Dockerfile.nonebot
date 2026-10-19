@@ -38,6 +38,12 @@ WORKDIR /app
 
 # 先装依赖（利用层缓存：依赖不变则不重装）
 COPY pyproject.toml ./
+# 注意：maimaidx 与 rollpig-plus 必须分两步安装。
+# 合并成一条 pip install 会让解析器同时求解两者的 Pillow 约束
+# （maimaidx 3.1.3 要求 pillow<12，rollpig 要求 >=12.2）而回溯到
+# maimaidx 的远古版本，最终 ResolutionImpossible。
+# 分步安装时第二步只解析 rollpig 的依赖，pillow 升级对已装的
+# maimaid 仅为警告（实测其代码用的都是 Image.Resampling.* 新 API，兼容）。
 RUN set -eux; \
     pip install --upgrade pip; \
     pip install . ; \
@@ -45,6 +51,9 @@ RUN set -eux; \
     pip install nonebot-plugin-rollpig-plus ; \
     playwright install --with-deps chromium; \
     playwright install-deps chromium || true
+
+# 图片帮助插件（picmenu-next）：依赖 htmlrender/playwright，镜像已装 chromium
+RUN pip install nonebot-plugin-picmenu-next
 
 # 本地插件（vendored，随镜像一起构建，改代码后需 rebuild）
 #   plugins/nonebot_plugin_bilibili  B站视频解析（来自 GreaterLG70/nonebot-plugin-bilibili）

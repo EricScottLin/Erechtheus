@@ -1,167 +1,151 @@
-"""用户数据持久化层。
+"""Erectheus 经济玩法数据适配层。
 
-用单个 JSON 文件存储所有用户的经济数据，配合 asyncio.Lock 保证并发安全。
-数据目录由 nonebot_plugin_localstore 提供（容器内 /app/data/qqbot_economy，
-宿主机通过 docker-compose 挂载 ./data 持久化）。
+货币（月币/荣耀）与个人资料由 qqbot_core 统一存储；本模块只保留玩法字段
+（签到连签、鱼竿、鱼饵、捕鱼记录），并把 qqbot_core 的钱包拍平成经济插件
+原有代码习惯的扁平结构：
 
-为什么不引入数据库：
-  签到/捕鱼是低频写操作，单文件 JSON 足够，且零外部依赖，
-  备份就是复制一个文件，换机器迁移最省事。
+    get_user(uid) -> {
+        "kleos": ..., "drachma": ...,              # 余额
+        "total_kleos_earned": ..., "total_drachma_earned": ..., "total_drachma_spent": ...,
+        "last_sign_in": ..., "sign_streak": ...,   # 玩法字段（sections.qqbot_economy）
+        ...
+    }
 
-货币字段命名与 currency.py 的 CURRENCIES key 一致：
-  kleos    荣誉代币（不可消费）
-  drachma  软通货（可消费）
-另存 total_*_earned / total_*_spent 累计字段，供规范 §6 的 M_d / S_d / ρ 指标计算。
+因此 qqbot_economy/__init__.py 不需要改动：命令层照旧调用这几个函数，
+存储与代币校验都落在 qqbot_core。
 """
 
-import asyncio
-import json
-from datetime import date
-from pathlib import Path
 from typing import Any
 
 from nonebot.log import logger
+from nonebot.plugin import require
 
 try:
-    from nonebot_plugin_localstore import get_plugin_data_dir
+    _core = require("qqbot_core")
+except RuntimeError:  # pragma: no cover - 应由 bot.py 保证加载顺序
+    _core = None
+    logger.error(
+        "[qqbot_economy] 依赖 qqbot_core 未加载：请在 bot.py 中先加载 "
+        "plugins/qqbot_core，再加载本插件"
+    )
 
-    DATA_DIR: Path = get_plugin_data_dir()
-except Exception:  # pragma: no cover - localstore 缺失时退到当前目录
-    DATA_DIR = Path.cwd() / "data" / "qqbot_economy"
+SECTION = "qqbot_economy"
 
-DATA_FILE = DATA_DIR / "users.json"
+# 玩法字段（与货币无关）
+DEFAULTS: dict[str, Any] = {
+    # ---- 签到 ----
+    "last_sign_in": "",
+    "sign_streak": 0,
+    "total_sign_days": 0,
+    # ---- 捕鱼 ----
+    "rod_level": 1,
+    "bait": 0,
+    "total_fish": 0,
+    "fish_count": {},  # {rarity: n}
+    "best_fish": "",
+    "last_fish_ts": 0.0,
+}
 
-_lock = asyncio.Lock()
-_cache: dict[str, dict[str, Any]] | None = None
-
-
-def _default_user() -> dict[str, Any]:
-    return {
-        # ---- 代币（key 与 currency.py 对应）----
-        "kleos": 0,
-        "drachma": 0,
-        # ---- 累计字段（监控指标用，规范 §6）----
-        "total_kleos_earned": 0,
-        "total_drachma_earned": 0,
-        "total_drachma_spent": 0,
-        # ---- 签到 ----
-        "last_sign_in": "",
-        "sign_streak": 0,
-        "total_sign_days": 0,
-        # ---- 捕鱼 ----
-        "rod_level": 1,
-        "bait": 0,
-        "total_fish": 0,
-        "fish_count": {},  # {rarity: n}
-        "best_fish": "",
-        "last_fish_ts": 0.0,
-    }
-
-
-def _load() -> dict[str, dict[str, Any]]:
-    global _cache
-    if _cache is not None:
-        return _cache
-    if DATA_FILE.exists():
-        try:
-            raw = json.loads(DATA_FILE.read_text(encoding="utf-8"))
-            if isinstance(raw, dict):
-                _cache = raw
-                return _cache
-            logger.warning(f"[qqbot_economy] {DATA_FILE} 结构异常，已重置")
-        except Exception as e:
-            logger.warning(f"[qqbot_economy] 读取 {DATA_FILE} 失败：{e}，已重置")
-    _cache = {}
-    return _cache
+# 这些字段属于钱包，禁止通过 update_user 直接改（必须走 earn/spend）
+WALLET_FLAT_KEYS = {
+    "kleos",
+    "drachma",
+    "total_kleos_earned",
+    "total_drachma_earned",
+    "total_drachma_spent",
+    "total_kleos_spent",
+}
 
 
-async def _save() -> None:
-    if _cache is None:
-        return
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    tmp = DATA_FILE.with_suffix(".tmp")
-    tmp.write_text(json.dumps(_cache, ensure_ascii=False, indent=2), encoding="utf-8")
-    tmp.replace(DATA_FILE)  # 原子替换，避免写一半损坏
+def require_core():
+    if _core is None:
+        raise RuntimeError(
+            "qqbot_economy 依赖 qqbot_core，请先在 bot.py 加载 plugins/qqbot_core"
+        )
+    return _core
 
 
-def _ensure_fields(user: dict[str, Any]) -> None:
-    """兜底补齐新版本新增字段，旧数据文件无需迁移。"""
-    for k, v in _default_user().items():
-        user.setdefault(k, v)
+def _flatten(nested: dict[str, Any], gameplay: dict[str, Any]) -> dict[str, Any]:
+    """把 qqbot_core 的嵌套用户结构拍平成经济插件习惯的扁平结构。"""
+    out = dict(gameplay)
+    wallet = nested["wallet"]
+    for key in ("kleos", "drachma"):
+        out[key] = int(wallet[key]["balance"])
+    out["total_kleos_earned"] = int(wallet["kleos"]["total_earned"])
+    out["total_drachma_earned"] = int(wallet["drachma"]["total_earned"])
+    out["total_drachma_spent"] = int(wallet["drachma"]["total_spent"])
+    out["total_kleos_spent"] = int(wallet["kleos"]["total_spent"])
+    return out
 
 
 async def get_user(user_id: str) -> dict[str, Any]:
-    """取用户数据（不存在则创建默认值，但不落盘）。"""
-    async with _lock:
-        data = _load()
-        user = data.get(user_id)
-        if user is None:
-            user = _default_user()
-            data[user_id] = user
-        _ensure_fields(user)
-        return dict(user)
+    """取用户数据（合并钱包与玩法字段，不存在则返回默认值，不落盘）。"""
+    nested = await require_core().storage.get_user(user_id)
+    gameplay = {**DEFAULTS, **nested["sections"].get(SECTION, {})}
+    return _flatten(nested, gameplay)
 
 
 async def update_user(user_id: str, **fields: Any) -> dict[str, Any]:
-    """更新用户字段并立即落盘，返回最新数据。"""
-    async with _lock:
-        data = _load()
-        user = data.get(user_id)
-        if user is None:
-            user = _default_user()
-            data[user_id] = user
-        _ensure_fields(user)
-        user.update(fields)
-        await _save()
-        return dict(user)
+    """更新玩法字段并落盘，返回最新数据。货币字段请走 earn/spend。"""
+    bad = {k for k in fields if k in WALLET_FLAT_KEYS}
+    if bad:
+        raise KeyError(f"货币字段不能直接 update：{bad}，请使用 earn/spend")
+    await require_core().storage.update_section(user_id, SECTION, **fields)
+    return await get_user(user_id)
 
 
 async def earn(user_id: str, currency: str, amount: int, **extra: Any) -> dict[str, Any]:
-    """发放代币并累加对应 total_*_earned（监控用）。"""
+    """发币并可选更新玩法字段，原子完成。"""
     if amount <= 0:
         raise ValueError("earn amount 必须为正")
-    async with _lock:
-        data = _load()
-        user = data.get(user_id)
-        if user is None:
-            user = _default_user()
-            data[user_id] = user
-        _ensure_fields(user)
-        user[currency] = user.get(currency, 0) + amount
-        user[f"total_{currency}_earned"] = (
-            user.get(f"total_{currency}_earned", 0) + amount
-        )
-        user.update(extra)
-        await _save()
-        return dict(user)
+    core = require_core()
+
+    def _m(user: dict[str, Any]) -> None:
+        core.wallet._apply_earn(user, currency, amount, None)
+        if extra:
+            user["sections"].setdefault(SECTION, {}).update(extra)
+
+    await core.storage.transact(user_id, _m)
+    return await get_user(user_id)
 
 
-async def spend(user_id: str, currency: str, amount: int, **extra: Any) -> dict[str, Any] | None:
-    """扣除代币。余额不足返回 None，成功返回最新数据。"""
+async def spend(
+    user_id: str, currency: str, amount: int, **extra: Any
+) -> dict[str, Any] | None:
+    """扣币并可选更新玩法字段。余额不足返回 None。"""
     if amount <= 0:
         raise ValueError("spend amount 必须为正")
-    async with _lock:
-        data = _load()
-        user = data.get(user_id)
-        if user is None:
-            user = _default_user()
-            data[user_id] = user
-        _ensure_fields(user)
-        if user.get(currency, 0) < amount:
-            return None
-        user[currency] -= amount
-        user[f"total_{currency}_spent"] = (
-            user.get(f"total_{currency}_spent", 0) + amount
-        )
-        user.update(extra)
-        await _save()
-        return dict(user)
+    core = require_core()
+
+    def _m(user: dict[str, Any]) -> bool:
+        ok = core.wallet._apply_spend(user, currency, amount)
+        if ok and extra:
+            user["sections"].setdefault(SECTION, {}).update(extra)
+        return ok
+
+    ok = await core.storage.transact(user_id, _m)
+    return await get_user(user_id) if ok else None
+
+
+async def sign_in_reminders(user_id: str) -> list[str]:
+    """签到成功后要展示的活动提醒（由 qqbot_core 判断，失败则静默）。"""
+    core = require_core()
+    fn = getattr(core, "sign_in_reminders", None)
+    if fn is None:
+        return []
+    try:
+        return await fn(user_id)
+    except Exception:  # noqa: BLE001 —— 提醒失败不影响签到
+        return []
 
 
 def today_str() -> str:
-    return date.today().isoformat()
+    return require_core().storage.today_str()
 
 
 async def all_users() -> dict[str, dict[str, Any]]:
-    async with _lock:
-        return dict(_load())
+    users = await require_core().storage.all_users()
+    return {
+        uid: _flatten(u, {**DEFAULTS, **u["sections"].get(SECTION, {})})
+        for uid, u in users.items()
+    }

@@ -1,16 +1,16 @@
 """Erectheus 经济系统 —— 每日签到 + 捕鱼。
 
 双代币设计（详见 docs/CURRENCY_SPEC.md 与 currency.py）：
-  Kleos 荣耀 🏛      每日签到获得，不可消费，累计决定声望等级
-  Drachma 德拉克马 🪙  捕鱼获得，用于鱼饵 / 鱼竿升级 / 抽奖
+  荣耀 🏛      每日签到获得，不可消费，累计决定声望等级
+  月币 🌙  捕鱼获得，用于鱼饵 / 鱼竿升级 / 抽奖
 
 命令：
-  签到            每日签到领 Kleos（连签有加成）
+  签到            每日签到领荣耀（连签有加成）
   面板            查看个人经济面板
-  捕鱼            下网捕鱼，获得 Drachma 与经验（有冷却）
+  捕鱼            下网捕鱼，获得月币与经验（有冷却）
   商店            查看可购商品
   购买 <编号>      购买鱼饵或升级鱼竿
-  单抽/十连/百连   消耗 Drachma 抽奖
+  单抽/十连/百连   消耗月币抽奖
   货币            查看货币体系与运行指标（管理员）
 """
 
@@ -26,19 +26,34 @@ from nonebot.plugin import PluginMetadata
 
 from . import currency as cur
 from .config import Config
-from .data import all_users, earn, get_user, spend, today_str, update_user
-from .fish import RARITY_COLOR, RARITY_LABEL, FISHES, pick_fish, rarity_probs
+from .data import (
+    all_users,
+    earn,
+    get_user,
+    sign_in_reminders,
+    spend,
+    today_str,
+    update_user,
+)
+from .fish import (
+    RARITY_COLOR,
+    RARITY_LABEL,
+    FISHES,
+    ROD_RARITY_BOOST_PER_LEVEL,
+    pick_fish,
+    rarity_probs,
+)
 
 __plugin_meta__ = PluginMetadata(
     name="Erectheus 经济",
-    description="每日签到获取 Kleos 荣耀，捕鱼获取 Drachma 德拉克马，可升级鱼竿与抽奖",
+    description="每日签到获取 荣耀，捕鱼获取 月币，可升级鱼竿与抽奖",
     usage="""\
-签到            每日签到领 Kleos（连签有加成）
+签到            每日签到领荣耀（连签有加成）
 面板            查看个人经济面板
-捕鱼            下网捕鱼，获得 Drachma 与经验
+捕鱼            下网捕鱼，获得月币与经验
 商店            查看可购商品
 购买 <编号>      购买鱼饵或升级鱼竿
-单抽/十连/百连   消耗 Drachma 抽奖
+单抽/十连/百连   消耗月币抽奖
 货币            查看货币体系与运行指标""",
     type="application",
     supported_adapters={"~onebot.v11"},
@@ -55,7 +70,7 @@ def _yesterday_str() -> str:
 
 
 def _best_value(best_name: str) -> int:
-    """按鱼名反查 Drachma 价值，用于判断是否刷新最佳渔获。"""
+    """按鱼名反查 月币 价值，用于判断是否刷新最佳渔获。"""
     for f in FISHES:
         if f.name == best_name:
             return f.drachma
@@ -96,17 +111,16 @@ async def handle_sign(event: MessageEvent) -> None:
         if streak >= cur.SIGN_STREAK_MAX
         else ""
     )
-    await sign.finish(
-        "\n".join(
-            [
-                "📜 签到成功",
-                f"  获得 {cur.fmt(KLEOS, kleos)}",
-                f"  连续签到 {streak} 天{streak_note}",
-                f"  累计 {cur.fmt(KLEOS, user['total_kleos_earned'])}",
-                f"  声望等级 Lv.{level}",
-            ]
-        )
-    )
+    lines = [
+        "📜 签到成功",
+        f"  获得 {cur.fmt(KLEOS, kleos)}",
+        f"  连续签到 {streak} 天{streak_note}",
+        f"  累计 {cur.fmt(KLEOS, user['total_kleos_earned'])}",
+        f"  声望等级 Lv.{level}",
+    ]
+    # 进行中的限时活动提醒（由 qqbot_core 判断，失败不影响签到）
+    lines += await sign_in_reminders(uid)
+    await sign.finish("\n".join(lines))
 
 
 # ---------------------------------------------------------------- /面板
@@ -124,7 +138,7 @@ async def handle_panel(event: MessageEvent) -> None:
     lines = [
         f"🏛 {event.sender.card or event.get_user_id()} 的面板",
         "────────────────",
-        f"声望等级   Lv.{level}（再 {to_next} Kleos 升级）",
+        f"声望等级   Lv.{level}（再 {to_next} 荣耀 升级）",
         f"{cur.fmt(KLEOS, u['kleos'])}   累计 {u['total_kleos_earned']:,}",
         f"签到       连续 {u['sign_streak']} 天 · 共 {u['total_sign_days']} 天",
         "────────────────",
@@ -222,7 +236,7 @@ async def handle_shop(event: MessageEvent) -> None:
         lines += [
             f"[2] 鱼竿升级    {cur.fmt(DRACHMA, rod_price)}",
             f"    Lv.{u['rod_level']} → Lv.{u['rod_level'] + 1}，"
-            f"SR/SSR 出货权重 +{cur.ROD_RARITY_BOOST_PER_LEVEL:.0%}",
+            f"SR/SSR 出货权重 +{ROD_RARITY_BOOST_PER_LEVEL:.0%}",
         ]
     else:
         lines.append("[2] 鱼竿升级    已满级")
@@ -230,7 +244,7 @@ async def handle_shop(event: MessageEvent) -> None:
     lines += [
         "────────────────",
         "抽奖（高价值，负期望）：",
-        f"  单抽 {cur.GACHA_SINGLE} · 十连 {cur.GACHA_TEN} · 百连 {cur.GACHA_HUNDRED} Drachma",
+        f"  单抽 {cur.GACHA_SINGLE} · 十连 {cur.GACHA_TEN} · 百连 {cur.GACHA_HUNDRED} 月币",
         f"你的资产：{cur.fmt(DRACHMA, u['drachma'])}",
         "用法：/购买 1   或   /单抽",
     ]
@@ -254,7 +268,7 @@ async def handle_buy(event: MessageEvent, arg: Message = CommandArg()) -> None:
         u = await get_user(uid)
         r = await spend(uid, DRACHMA, price, bait=u["bait"] + 1)
         if r is None:
-            await buy.finish(f"Drachma 不足，需要 {cur.fmt(DRACHMA, price)}")
+            await buy.finish(f"月币 不足，需要 {cur.fmt(DRACHMA, price)}")
         await buy.finish(f"买到 1 个鱼饵，现有 {r['bait']} 个")
 
     elif item == "2":
@@ -264,7 +278,7 @@ async def handle_buy(event: MessageEvent, arg: Message = CommandArg()) -> None:
             await buy.finish("鱼竿已满级，去抽奖吧")
         r = await spend(uid, DRACHMA, price, rod_level=u["rod_level"] + 1)
         if r is None:
-            await buy.finish(f"Drachma 不足，升级需要 {cur.fmt(DRACHMA, price)}")
+            await buy.finish(f"月币 不足，升级需要 {cur.fmt(DRACHMA, price)}")
         await buy.finish(f"鱼竿升到 Lv.{r['rod_level']}！稀有度出货权重提升")
 
     else:
@@ -272,7 +286,7 @@ async def handle_buy(event: MessageEvent, arg: Message = CommandArg()) -> None:
 
 
 # ---------------------------------------------------------------- 抽奖
-# 负期望设计（规范 §6 缓解措施 #1）：投入 100，期望回收约 57.5 Drachma
+# 负期望设计（规范 §6 缓解措施 #1）：投入 100，期望回收约 57.5 月币
 _GACHA_PRIZES = (
     (0.60, DRACHMA, 20, "小补偿"),
     (0.25, DRACHMA, 50, "略有收获"),
@@ -293,7 +307,7 @@ async def _do_gacha(uid: str, times: int, total_cost: int) -> str:
     u = await get_user(uid)
     r = await spend(uid, DRACHMA, total_cost)
     if r is None:
-        return f"Drachma 不足，需要 {cur.fmt(DRACHMA, total_cost)}"
+        return f"月币 不足，需要 {cur.fmt(DRACHMA, total_cost)}"
     u = r
 
     total_back = 0
@@ -321,7 +335,7 @@ async def _do_gacha(uid: str, times: int, total_cost: int) -> str:
         f"🎲 抽奖 {times} 次，花费 {cur.fmt(DRACHMA, total_cost)}",
         f"回收 {cur.fmt(DRACHMA, total_back)}"
         + (f" + 鱼饵 ×{got_bait}" if got_bait else ""),
-        f"净{'赚' if net >= 0 else '亏'} {abs(net)} Drachma",
+        f"净{'赚' if net >= 0 else '亏'} {abs(net)} 月币",
     ]
     if best_label:
         lines.append(f"最大奖：{best_label}")
@@ -374,10 +388,10 @@ async def handle_econ() -> None:
     lines += [
         "────────────────",
         f"活跃用户         {m.active_users}",
-        f"Kleos 累计铸造   {m.total_kleos_minted:,}",
-        f"Drachma 累计铸造 {m.total_drachma_minted:,}",
-        f"Drachma 累计销毁 {m.total_drachma_spent:,}",
-        f"Drachma 当前流通 {m.drachma_in_circulation:,}",
+        f"荣耀 累计铸造   {m.total_kleos_minted:,}",
+        f"月币 累计铸造 {m.total_drachma_minted:,}",
+        f"月币 累计销毁 {m.total_drachma_spent:,}",
+        f"月币 当前流通 {m.drachma_in_circulation:,}",
     ]
     if m.notes:
         lines.append("────────────────")
@@ -387,7 +401,7 @@ async def handle_econ() -> None:
         "────────────────",
         f"抽奖期望回收    {ev:.1f} / 投入 {cur.GACHA_SINGLE}"
         f"（负期望 {1 - ev / cur.GACHA_SINGLE:.1%}）",
-        f"鱼竿满级总成本  {cur.rod_max_total_cost():,} Drachma",
+        f"鱼竿满级总成本  {cur.rod_max_total_cost():,} 月币",
         "完整规范见 docs/CURRENCY_SPEC.md",
     ]
     await econ.finish("\n".join(lines))

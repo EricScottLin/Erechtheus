@@ -4,7 +4,8 @@
 
 - ``/ping``    探活，测量接口往返与消息链路延迟（拥堵情况）
 - ``/echo``    原样回显，验证「收到 -> 处理 -> 发出」全链路
-- ``/help``    列出当前已加载的插件，便于确认插件是否生效
+- ``/指令``    文本帮助菜单：列出插件与命令，``/指令 <插件>`` 看详情
+                （``/help``、``帮助``、``菜单`` 由 nonebot-plugin-picmenu-next 提供图片菜单）
 - ``/status``  查询机器人运行状态（在线/收发消息/已运行时长）
 
 遵循 NoneBot 官方插件编写规范：
@@ -26,7 +27,9 @@ __plugin_meta__ = PluginMetadata(
     usage="""\
 /ping            探活，测接口与链路延迟
 /echo <内容>      原样回显，验证消息链路
-/help            列出已加载的插件
+/指令            文本帮助菜单（列出插件与命令）
+/指令 <插件名>    查看指定插件的详细用法
+/help            图片帮助菜单（由 picmenu-next 提供）
 /status          查询在线状态、收发消息数与运行时长""",
     type="application",
     homepage="https://github.com/nonebot-qqbot",
@@ -109,23 +112,99 @@ async def handle_echo(event: MessageEvent, arg: Message = CommandArg()) -> None:
     await echo.finish(prefix + f"收到：{text}")
 
 
-# ---------------------------------------------------------------- /help
-help_cmd = on_command("help", aliases={"帮助", "菜单"}, priority=5, block=True)
+# ---------------------------------------------------------------- /指令（文本帮助菜单）
+# 图片菜单由 nonebot-plugin-picmenu-next 接管 /help、/帮助、/菜单；
+# 这里提供一份纯文本、零渲染依赖的「保底」菜单。
+help_cmd = on_command("指令", aliases={"指令列表", "cmds"}, priority=5, block=True)
+
+
+def _plugin_title(p) -> str:
+    """插件展示名：优先 PluginMetadata.name，否则包名。"""
+    meta = getattr(p, "metadata", None)
+    return meta.name if meta and meta.name else p.name
+
+
+def _visible_plugins() -> list:
+    """参与菜单展示的插件，过滤 library 类型（localstore/apscheduler 等）。"""
+    plugins = []
+    for p in get_loaded_plugins():
+        meta = getattr(p, "metadata", None)
+        if meta is not None and meta.type == "library":
+            continue
+        plugins.append(p)
+    return sorted(plugins, key=_plugin_title)
+
+
+def _plugin_body(p) -> list[str]:
+    """插件的用法行：优先 PluginMetadata.usage，其次 description。"""
+    meta = getattr(p, "metadata", None)
+    if meta is None:
+        return []
+    if meta.usage:
+        return [ln.rstrip() for ln in meta.usage.strip().splitlines() if ln.strip()]
+    return [meta.description] if meta.description else []
+
+
+def _match_plugin(plugins: list, query: str):
+    """按序号 / 包名 / 展示名 / 关键字匹配插件。"""
+    if query.isdigit():
+        idx = int(query) - 1
+        if 0 <= idx < len(plugins):
+            return plugins[idx]
+    q = query.lower()
+    for p in plugins:
+        if q == p.name.lower() or q == _plugin_title(p).lower():
+            return p
+    for p in plugins:
+        if q in p.name.lower() or q in _plugin_title(p).lower():
+            return p
+    return None
 
 
 @help_cmd.handle()
-async def handle_help(event: MessageEvent) -> None:
-    """列出当前已加载的插件。"""
-    plugins = sorted(get_loaded_plugins(), key=lambda p: p.name)
-    limit = plugin_config.qqbot_toolbox_help_max
+async def handle_help(event: MessageEvent, arg: Message = CommandArg()) -> None:
+    """文本帮助菜单：列出插件与命令，/指令 <插件> 查看详情。"""
+    plugins = _visible_plugins()
+    query = arg.extract_plain_text().strip()
+    prefix = _reply_prefix(event)
 
-    lines = ["📖 已加载插件："]
-    for p in plugins[:limit]:
-        lines.append(f"  • {p.name}（matcher ×{len(p.matcher)}）")
-    if len(plugins) > limit:
-        lines.append(f"  …另有 {len(plugins) - limit} 个插件未显示")
+    # 列表
+    if not query:
+        limit = plugin_config.qqbot_toolbox_help_max
+        shown = plugins[:limit]
+        lines = [
+            "📖 指令菜单",
+            "用法：/指令 <插件名或序号> 查看详细用法；/help 查看图片菜单",
+            "────────────",
+        ]
+        for i, p in enumerate(shown, 1):
+            meta = getattr(p, "metadata", None)
+            desc = (meta.description if meta and meta.description else "").strip()
+            if len(desc) > 40:
+                desc = desc[:40] + "…"
+            lines.append(f"{i}. {_plugin_title(p)}「{p.name}」")
+            if desc:
+                lines.append(f"    {desc}")
+        if len(plugins) > limit:
+            lines.append(f"…另有 {len(plugins) - limit} 个插件未显示")
+        await help_cmd.finish(prefix + "\n".join(lines))
 
-    await help_cmd.finish(_reply_prefix(event) + "\n".join(lines))
+    # 详情
+    p = _match_plugin(plugins, query)
+    if p is None:
+        await help_cmd.finish(prefix + f"没找到「{query}」，发 /指令 查看全部插件。")
+
+    meta = getattr(p, "metadata", None)
+    lines = [f"📖 {_plugin_title(p)}「{p.name}」"]
+    if meta and meta.description:
+        lines.append(meta.description)
+    body = _plugin_body(p)
+    if body:
+        lines.append("────────────")
+        lines.extend(body)
+    else:
+        lines.append("（该插件未提供用法说明）")
+    await help_cmd.finish(prefix + "\n".join(lines))
 
 
 # ---------------------------------------------------------------- /status

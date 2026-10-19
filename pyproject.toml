@@ -27,3 +27,4 @@ nonebot-adapter-onebot = [
 # 换成 vendored 的 GreaterLG70 视频解析插件，见 plugins/nonebot_plugin_bilibili/
 "@local" = []
 nonebot_plugin_maimaidx = ["nonebot_plugin_maimaidx"]
+nonebot_plugin_picmenu_next = ["nonebot_plugin_picmenu_next"]

@@ -12,9 +12,11 @@
 """
 import asyncio
 import hashlib
+import os
 import re
 import time
 import urllib.parse
+from pathlib import Path
 
 import httpx
 from nonebot.log import logger
@@ -23,7 +25,15 @@ UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
 HEADERS = {"User-Agent": UA, "Referer": "https://www.bilibili.com/"}
 
+# 可选：B站账号 Cookie。带上 SESSDATA 后 playurl 才会返回 720P/1080P
+# （匿名只有 360P/480P）。不配也能正常解析，只是最高 480P。
+SESSDATA = os.getenv("BILI_SESSDATA", "").strip()
+if SESSDATA:
+    HEADERS["Cookie"] = f"SESSDATA={SESSDATA}"
+
 API_VIDEO = "https://api.bilibili.com/x/web-interface/view"
+API_WBI_VIDEO = "https://api.bilibili.com/x/web-interface/wbi/view"
+API_PLAYURL = "https://api.bilibili.com/x/player/playurl"
 API_CARD = "https://api.bilibili.com/x/web-interface/card"
 API_RELATION = "https://api.bilibili.com/x/relation/stat"
 API_RANKING = "https://api.bilibili.com/x/web-interface/ranking/v2"
@@ -70,6 +80,13 @@ class BiliRiskError(BiliError):
         self.code = code
 
 
+class NotVideoLink(BiliError):
+    """短链解析出来不是视频（可能是直播/专栏/动态），群里应静默忽略。"""
+
+    def __init__(self):
+        super().__init__("这不是视频链接（可能是直播/专栏/动态）")
+
+
 def _today() -> int:
     return int(time.time()) // 86400
 
@@ -99,6 +116,17 @@ def _wbi_sign(params: dict, key: str) -> dict:
     query = urllib.parse.urlencode(sorted(clean.items()))
     params["w_rid"] = hashlib.md5((query + key).encode()).hexdigest()
     return params
+
+
+async def _wbi_get(client: httpx.AsyncClient, url: str, params: dict) -> dict:
+    """带 wbi 签名的 GET。
+
+    `x/web-interface/view` 从机房 IP 直连会被 412（2026-10 实测，本机同 IP 上
+    nav/popular/card 都 200，唯独 view 412），但走 wbi 签名的
+    `x/web-interface/wbi/view` 正常返回 —— 这是 B站 web 播放器自己用的入口。
+    """
+    key = await _get_mixin_key(client)
+    return await _jget(client, url, _wbi_sign(params, key))
 
 
 async def _jget(client: httpx.AsyncClient, url: str, params: dict,
@@ -189,17 +217,22 @@ async def resolve_short_url(client: httpx.AsyncClient, url: str) -> str:
 
 
 async def fetch_video(key: str, value: str) -> dict:
-    """视频详情：标题/简介/UP/播放/点赞/投币/收藏/分享/评论。"""
+    """视频详情：标题/简介/UP/播放/点赞/投币/收藏/分享/评论。
+
+    注意：走 wbi 签名的 wbi/view。裸 view 接口从机房 IP 请求会 412（反爬），
+    见 _wbi_get 的说明。
+    """
     async with httpx.AsyncClient() as client:
         if key == "url":
             resolved = await resolve_short_url(client, value)
             t = extract_target(resolved) if resolved else None
             if not t:
-                raise BiliError("短链还原失败，换一条完整链接试试")
+                raise NotVideoLink()
             key, value = t
-        data = await _jget(client, API_VIDEO, {key: value})
+        data = await _wbi_get(client, API_WBI_VIDEO, {key: value})
         stat = data.get("stat") or {}
         owner = data.get("owner") or {}
+        pages = data.get("pages") or []
         return {
             "title": data.get("title", ""),
             "bvid": data.get("bvid", ""),
@@ -207,6 +240,8 @@ async def fetch_video(key: str, value: str) -> dict:
             "pic": data.get("pic", ""),
             "pubdate": data.get("pubdate", 0),
             "duration": data.get("duration", 0),
+            "cid": data.get("cid") or (pages[0].get("cid") if pages else 0),
+            "pages": len(pages),
             "owner_name": owner.get("name", ""),
             "owner_mid": owner.get("mid", 0),
             "view": stat.get("view", 0),
@@ -217,6 +252,113 @@ async def fetch_video(key: str, value: str) -> dict:
             "share": stat.get("share", 0),
             "like": stat.get("like", 0),
         }
+
+
+async def fetch_playurl(bvid: str, cid: int, qn: int = 64) -> dict:
+    """取播放地址（DASH 优先，含分离的音视频流）。
+
+    fnval=16 表示请求 DASH；匿名可拿到 480P/720P（1080P 及以上需登录）。
+    返回值直接用 pick_streams() 挑选。
+    """
+    async with httpx.AsyncClient() as client:
+        return await _jget(
+            client, API_PLAYURL,
+            {"bvid": bvid, "cid": cid, "qn": qn, "fnval": 16, "fourk": 0},
+        )
+
+
+def _codec_rank(codecs: str) -> int:
+    """编码优先级：avc1(h264) > hev1/hvc1(hevc) > 其他。压缩重编码时 h264 解码最快。"""
+    c = (codecs or "").lower()
+    if c.startswith("avc1"):
+        return 0
+    if c.startswith(("hev1", "hvc1")):
+        return 1
+    return 2
+
+
+def _short_side(v: dict) -> int:
+    """画质档位看「短边」：横屏是 height，竖屏（如 480x852）是 width。"""
+    w = int(v.get("width") or 0)
+    h = int(v.get("height") or 0)
+    if w and h:
+        return min(w, h)
+    return h or w or 0
+
+
+def pick_streams(play: dict, max_height: int = 480):
+    """从 playurl 结果里挑视频流 + 音频流。
+
+    返回 (video: dict, audio: dict|None, duration: int)。
+    没有 DASH（老视频只有 durl 渐进流）时返回 (None, None, duration)，
+    调用方用 durl 直接下载。
+    """
+    dash = play.get("dash") or {}
+    duration = int(dash.get("duration") or play.get("timelength", 0) // 1000)
+    videos = dash.get("video") or []
+    audios = dash.get("audio") or []
+    if not videos:
+        return None, None, duration
+
+    # 优先 avc1，其次 hevc；档位 ≤max_height 里挑最高的，避免超清浪费带宽
+    cand = [v for v in videos if _short_side(v) <= max_height] or videos
+    cand.sort(key=lambda v: (
+        0 if _short_side(v) <= max_height else 1,
+        -_short_side(v),
+        _codec_rank(v.get("codecs", "")),
+        -int(v.get("bandwidth") or 0),
+    ))
+    video = cand[0]
+
+    audio = None
+    if audios:
+        audio = max(audios, key=lambda a: int(a.get("bandwidth") or 0))
+    return video, audio, duration
+
+
+async def download_file(url: str, path: str, timeout: float = 180.0,
+                        retries: int = 3) -> int:
+    """下载一个流到本地文件（CDN 必须带 UA + Referer）。
+
+    B站 CDN 节点限流/掉线很常见（RemoteProtocolError / 403 / 509），所以：
+    - 失败退避重试（1.5s、3s、4.5s）；
+    - 每次都从已下载的字节数用 `Range` 续传，而不是从头再来；
+    - 服务器不支持 Range（返回 200）时自动改为重头写。
+    返回字节数，最终失败抛 BiliError（带最后一次的错误类型）。大文件流式写。
+    """
+    last = "未知错误"
+    target = Path(path)
+    for attempt in range(retries + 1):
+        done = target.stat().st_size if target.exists() else 0
+        headers = dict(HEADERS)
+        if done:
+            headers["Range"] = f"bytes={done}-"
+        try:
+            async with httpx.AsyncClient(follow_redirects=True) as client:
+                async with client.stream("GET", url, headers=headers,
+                                         timeout=httpx.Timeout(timeout)) as r:
+                    if done and r.status_code == 416:   # 已经下完了
+                        return done
+                    r.raise_for_status()
+                    if r.status_code != 206:            # 不支持续传，重头写
+                        done = 0
+                    mode = "ab" if done else "wb"
+                    with open(target, mode) as f:
+                        async for chunk in r.aiter_bytes(1 << 20):
+                            f.write(chunk)
+                            done += len(chunk)
+            return done
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 416:
+                return target.stat().st_size
+            last = f"HTTP {e.response.status_code}"
+        except (httpx.RemoteProtocolError, httpx.ReadTimeout, httpx.ConnectError):
+            last = "连接被CDN断开"
+        except Exception as e:
+            last = type(e).__name__
+        if attempt < retries:
+            await asyncio.sleep(1.5 * (attempt + 1))
+    raise BiliError(f"下载视频流失败：{last}")
 
 
 async def fetch_up_card(mid: int) -> dict:

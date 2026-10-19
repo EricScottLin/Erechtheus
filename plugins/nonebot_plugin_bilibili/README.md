@@ -1,7 +1,7 @@
 # nonebot-plugin-bilibili · B站助手
 
 一个给 [NoneBot2](https://github.com/nonebot/nonebot2) 用的 B站（bilibili）插件：
-**群里艾特机器人 + 链接就自动解析视频**，另外还能查**今日排行榜**和**UP主数据**。
+**发链接 → 解析 → 回 y → 下载压缩后把视频发到群里**，另外还能查**今日排行榜**和**UP主数据**。
 
 自研原因：社区现有的 B站插件（`mengshouer/nonebot_plugin_analysis_bilibili` 等）多停在
 2023~2024 年，没做 B站的 wbi 签名与反爬适配，实测已大面积失效。本插件的所有接口调用都
@@ -11,9 +11,10 @@
 
 | # | 功能 | 触发方式 |
 |---|---|---|
-| 1 | **视频解析**：标题 / 简介 / UP主（含粉丝数）/ 播放 / 点赞 / 投币 / 收藏 / 弹幕 / 评论 / 分享 / 时长 | 群里 `@机器人 + 链接`，或私聊直接发链接 |
-| 2 | **排行榜**：全站或 16 个分区，可指定条数 | `/bilibili rank [分区] [条数]` |
-| 3 | **UP主查询**：粉丝 / 稿件 / 关注 / 获赞 | `/bilibili up <UID 或 昵称>` |
+| 1 | **视频解析**：标题 / 简介 / UP主（含粉丝数）/ 播放 / 点赞 / 投币 / 收藏 / 弹幕 / 评论 / 分享 / 时长 | 群里发链接（默认不用@），或私聊直接发 |
+| 2 | **发视频**：下载 → ffmpeg 压缩（480P/≤20MB）→ 发到群里 | 解析后回 `y` 确认 |
+| 3 | **排行榜**：全站或 16 个分区，可指定条数 | `/bilibili rank [分区] [条数]` |
+| 4 | **UP主查询**：粉丝 / 稿件 / 关注 / 获赞 | `/bilibili up <UID 或 昵称>` |
 
 支持的链接形态：完整链接 `bilibili.com/video/BV...`、av 号、`BV` 裸号、
 以及 **`b23.tv` 短链**。
@@ -21,8 +22,9 @@
 ## 命令清单
 
 ```
-@机器人 https://www.bilibili.com/video/BVxxxx    ← 解析视频（群里必须@，私聊不用）
-@机器人 https://b23.tv/xxxx                      ← 短链也行
+https://www.bilibili.com/video/BVxxxx             ← 群里直接发链接（默认不用@）
+y                                                ← 回 y 发送压缩视频
+@机器人 https://b23.tv/xxxx                       ← 短链也行
 
 /bilibili                    查看帮助
 /bilibili rank               今日全站榜 TOP10
@@ -51,7 +53,9 @@ nonebot.load_plugin("nonebot_plugin_bilibili")
 # 方式 B：把 nonebot_plugin_bilibili/ 整个目录拷进你的 plugins/ 下
 ```
 
-无需任何配置项，装完即可用。依赖 `httpx` 与 OneBot V11 适配器。
+依赖 `httpx` 与 OneBot V11 适配器，发视频还需要 `ffmpeg`（Dockerfile 已装）。
+所有行为通过环境变量配置（`BILI_VIDEO_*`，见上一级 README 的表格），全部有默认值，
+不配也能用。
 
 ## 输出示例
 
@@ -68,6 +72,12 @@ UP：索尼音乐中国（UID 486906719）· 粉丝 1738.3万
 
 ## 已知限制
 
+- **裸 `view` 接口从机房 IP 会 412**：改用 wbi 签名的 `x/web-interface/wbi/view`
+  （B站 web 播放器自己用的入口），2026-10 实测可用。
+- **1080P 及以上需要登录**：匿名只能拿 480P/720P，本插件压缩到 480P 所以够用。
+- **QQ 对视频消息有时长/体积限制**：默认上限 20MB / 10 分钟，可调 `BILI_VIDEO_MAX_*`。
+- **速度**：ffmpeg 直连 CDN 边下边转；剩余耗时主要是下载（CDN 约 1MB/s）与上传 QQ
+  （约 0.5~0.8MB/s），两项都是网络带宽限制。调 `BILI_VIDEO_HEIGHT=360` 可再快一倍。
 - **UP主“总播放量”拿不到**：B站的 `x/space/upstat` 已被掏空（加不加 wbi 签名都返回空字段），
   APP 端接口要签名、web 端 `arc/search` 直接 -352。所以 UP主查询只提供
   **粉丝 / 稿件 / 关注 / 被关注 / 获赞**，不编造播放量。

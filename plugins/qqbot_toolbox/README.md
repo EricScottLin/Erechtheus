@@ -8,7 +8,8 @@ NoneBot2 本地插件，提供消息链路验证与日常排查用的基础命�
 |---|---|---|
 | `/ping` | — | 探活。测量**接口往返**（NoneBot↔LLBot）与**链路延迟**（QQ→LLBot→OneBot WS→NoneBot），并按延迟给拥堵评价 |
 | `/echo <内容>` | — | 原样回显，验证「收到 → 处理 → 发出」全链路 |
-| `/help` | `帮助`、`菜单` | 列出当前已加载的插件及其 matcher 数量 |
+| `/help` | `帮助`、`菜单` | **图片帮助菜单**，由 `nonebot-plugin-picmenu-next` 提供（不在本插件内） |
+| `/指令` | `指令列表`、`cmds` | **文本帮助菜单**：按插件列出命令；`/指令 <插件名或序号>` 查看该插件详细用法（纯文本，零渲染依赖，作为图片菜单的保底） |
 | `/status` | `状态` | 在线/健康状态、收发消息数、已运行时长 |
 
 `/ping` 的两个指标：
@@ -28,7 +29,7 @@ NoneBot2 本地插件，提供消息链路验证与日常排查用的基础命�
 | 配置项 | 类型 | 默认值 | 说明 |
 |---|---|---|---|
 | `qqbot_toolbox_at_sender` | bool | `true` | 回复时是否 @ 发起者 |
-| `qqbot_toolbox_help_max` | int | `20` | `/help` 最多列出的插件数（1–100） |
+| `qqbot_toolbox_help_max` | int | `20` | `/指令` 菜单最多列出的插件数（1–100） |
 | `qqbot_toolbox_status_timeout` | float | `5.0` | `/ping`、`/status` 调用 OneBot 接口的超时（秒） |
 
 ## 开发

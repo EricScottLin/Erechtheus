@@ -1,0 +1,58 @@
+"""群聊管理插件（qqbot_group）。
+
+一个插件收拢所有群聊管理能力：
+
+- 禁言：``/烟``（8 小时内随机禁言）、``/禁言``（指定时长）、``/解禁``
+- 踢人：``/踢``
+- 全员禁言：``/全体禁言``、``/解除全体``
+- 撤回：``/撤``（撤回机器人自己上一条消息）
+- 复读：连续相同文本/图片达到阈值时跟着复读一次（默认 3 个不同用户、60 秒冷却）
+- 按群功能开关：``/本群功能``、``/开启 <功能>``、``/关闭 <功能>``
+
+权限模型：
+
+    1. 仅群聊消息生效，私聊直接忽略
+    2. 发送者必须是：群主 / 群管 / 机器人超级用户 / 配置的额外管理员
+    3. 禁言、踢人、全员禁言还要求机器人自身是本群管理员；
+       ``/撤`` 只撤回机器人自己的消息，因此只校验发送者
+
+代码按功能拆分为子模块（mute / kick / whole / recall / repeat），
+``__init__.py`` 负责插件元信息与导入注册。
+
+遵循 NoneBot 官方插件编写规范：
+https://nonebot.dev/docs/tutorial/create-plugin
+"""
+
+from nonebot.plugin import PluginMetadata
+
+from .config import Config
+
+# 导入即注册各自的事件响应器（NoneBot 分包插件写法）
+from . import features as features  # noqa: F401
+from . import kick as kick  # noqa: F401
+from . import mute as mute  # noqa: F401
+from . import permissions as permissions  # noqa: F401  （注册发送记录钩子）
+from . import recall as recall  # noqa: F401
+from . import repeat as repeat  # noqa: F401
+from . import whole as whole  # noqa: F401
+
+__plugin_meta__ = PluginMetadata(
+    name="群聊管理",
+    description="群聊管理：禁言/踢人/全体禁言、/撤 撤回、复读、按群功能开关",
+    usage="""\
+/烟 @用户           随机禁言（默认 1 分钟 ~ 8 小时）
+/禁言 @用户 [时长]   指定时长禁言，如 /禁言 @他 30m，默认 10 分钟
+/解禁 @用户          解除禁言
+/踢 @用户            移出群聊
+/全体禁言            开启全员禁言
+/解除全体            关闭全员禁言
+/撤                  撤回我上一条消息（仅管理员；/撤 或 @机器人 撤）
+/本群功能            查看本群功能开关
+/开启 <功能>         开启本群某功能（管理员）
+/关闭 <功能>         关闭本群某功能（管理员）
+（复读无需命令：连续 3 个不同用户发相同文本/图片时自动复读）""",
+    type="application",
+    homepage="https://github.com/nonebot-qqbot",
+    config=Config,
+    supported_adapters={"~onebot.v11"},
+)

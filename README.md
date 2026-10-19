@@ -27,15 +27,70 @@ LLBot 的 WebUI(3081) 与 OneBot WS(3001) 由配置文件强制绑定 `127.0.0.1
 
 | 插件 | 来源 | 功能 |
 |---|---|---|
-| `qqbot_toolbox` | 自研 | `/ping`（探活+链路延迟）、`/echo`、`/help`、`/status` |
+| `qqbot_toolbox` | 自研 | `/ping`（探活+链路延迟）、`/echo`、`/指令`（文本帮助菜单）、`/status` |
 | `qqbot_economy` | 自研 | 每日签到领 Kleos 荣耀、捕鱼赚 Drachma 德拉克马、鱼竿/鱼饵/抽奖 |
-| `nonebot_plugin_bilibili` | vendored from [GreaterLG70/nonebot-plugin-bilibili](https://github.com/GreaterLG70/nonebot-plugin-bilibili) | @机器人+B站链接解析视频、`/bilibili rank` 榜单、`/bilibili up` 查 UP 主 |
+| `qqbot_group` | 自研 | **群聊管理**：`/烟` 随机禁言（8 小时内）、`/禁言`、`/解禁`、`/踢`、`/全体禁言`、`/解除全体`、`/撤`（撤回机器人上一条消息）、复读、**按群功能开关**（`/本群功能`、`/关闭 视频解析`） |
+| `qqbot_meme` | 自研 | **表情包管理**：戳一戳随机回表情包、`/表情` 管理、金句库（群精华自动收录） |
+| `nonebot_plugin_bilibili` | vendored + 自研扩展（[GreaterLG70/nonebot-plugin-bilibili](https://github.com/GreaterLG70/nonebot-plugin-bilibili) 之上加了「发视频」） | 群里发B站链接 → 回 `y` 发压缩版视频；`/bilibili rank` 榜单；`/bilibili up` 查 UP 主 |
+| `nonebot_plugin_picmenu_next` | [lgc-NB2Dev/nonebot-plugin-picmenu-next](https://github.com/lgc-NB2Dev/nonebot-plugin-picmenu-next) | `/help`、`/帮助`、`/菜单` 图片帮助菜单（插件列表/详情/模糊搜索） |
 | `nonebot_plugin_maimaidx` | [Yuri-YuzuChaN/nonebot-plugin-maimaidx](https://github.com/Yuri-YuzuChaN/nonebot-plugin-maimaidx) | 舞萌 DX 查分器 |
 
 > **为什么 bilibili 插件是 vendored 的**：PyPI 上的 `nonebot-plugin-bilibili`
 > 是 `mengbingnaixi` 的「动态订阅」插件，与本文需要的「视频解析」插件**同名不同物**，
 > 直接 `pip install` 会装错。故将源码放入 `plugins/`，由 `bot.py` 用 `Path` 加载，
 > 同时避开包名冲突。
+
+## B站视频发送（2026-10 新增）
+
+有人在群里发 B站链接（`b23.tv` 短链 / `bilibili.com/video/BV...` / `av` 号都行），机器人会：
+
+1. 回复一条**信息卡**（标题 / UP主 / 播放 / 点赞 / 弹幕 / 时长）
+2. 提示「回 y 发 480P 压缩版（约 N MB）；要高画质回 y 720p / y 1080p」
+3. 用户回 `y` / `y 720p` / `y 1080p` 后，ffmpeg 直连 CDN 边下边转成 mp4 → 发到群里
+
+画质档位（`y` 后可带）：
+
+| 回复 | 画质 | 体积上限 | 是否需要账号 |
+|---|---|---|---|
+| `y` | 480P | 20MB | 不需要（匿名可用） |
+| `y 720p` | 720P | 40MB | **需要** `BILI_SESSDATA`（普通账号） |
+| `y 1080p` | 1080P | 80MB | **需要** `BILI_SESSDATA` + 通常是大会员 |
+| `y 360p` | 360P | 15MB | 不需要 |
+
+拿不到请求的画质时会自动降级，并回一条「⚠️ 这个视频最高只有 XP」的说明。
+
+获取 `BILI_SESSDATA`：浏览器登录 bilibili.com → F12 → Application → Cookies →
+复制 `SESSDATA` 的值填进 `.env`，然后 `docker compose up -d nonebot`。
+
+默认**不 @ 机器人也会响应**（群聊），但要求发链接者回 `y` 确认，避免刷屏和大流量下载。
+
+实现要点（踩坑记录见 `plugins/nonebot_plugin_bilibili/README.md`）：
+
+- 视频详情走 **wbi 签名的 `x/web-interface/wbi/view`** —— 裸 `view` 接口从机房 IP 请求会 412
+- 播放地址走 `x/player/playurl`（匿名可拿 480P/720P，1080P 需登录）
+- **ffmpeg 直连 CDN 边下边转**（带 Referer/UA），不再「先下载完再转码」——
+  2026-10 实测同一视频从 23s 降到 14.7s / 43s 降到 17.5s
+- 发送用 `base64://` 交给 LLBot（LLOneBot 的 `uri2local` 支持 base64/http/file 三种）
+- 全程单并发（`asyncio.Lock`），避免多人同时发链接打满 CPU
+
+> 速度上限在两条网线上：下载 B站 CDN 约 1MB/s（按 IP 限速，多连接实测无提升），
+> 上传 QQ 约 0.5~0.8MB/s。想更快就压小体积：`BILI_VIDEO_HEIGHT=360`（画质换速度，
+> 大约再快一倍）、或调低 `BILI_VIDEO_MAX_MB`。
+
+配置（`.env`，改完 `docker compose up -d nonebot` 生效）：
+
+| 变量 | 默认 | 说明 |
+|---|---|---|
+| `BILI_VIDEO_ENABLE` | 1 | 总开关 |
+| `BILI_VIDEO_AUTO` | 1 | 群里不用@也响应（0=必须@） |
+| `BILI_VIDEO_GROUPS` | 空 | 只在这些群自动响应（逗号分隔） |
+| `BILI_VIDEO_CONFIRM` | 1 | 先回卡、等 y 确认（0=直接发） |
+| `BILI_VIDEO_MAX_DURATION` | 600 | 超过这个秒数不发 |
+| `BILI_VIDEO_MAX_MB` | 20 | 压缩后体积上限 |
+| `BILI_VIDEO_HEIGHT` | 480 | 压缩后最大高度 |
+| `BILI_VIDEO_CRF` | 30 | 压缩质量 |
+| `BILI_VIDEO_QN` | 64 | 下载源画质（64=720P） |
+| `BILI_VIDEO_TTL` | 600 | 确认有效期（秒） |
 
 ## 快速开始
 
@@ -110,6 +165,7 @@ docker compose logs -f nonebot
 
 ## 文档
 
+- [功能更新记录（2026-10）](docs/FEATURES_2026-10-20.md) —— 群聊管理/表情包/金句/群精华/按群开关
 - [货币系统规范](docs/CURRENCY_SPEC.md) —— 双代币设计、防通胀指标、新增代币检查清单
 - [部署状态与待办](docs/QQBOT_DEPLOYMENT_STATUS.md)
 - [NoneBot 官方文档](https://nonebot.dev/)
