@@ -23,17 +23,20 @@ async def handle_recall(bot: Bot, event: GroupMessageEvent) -> None:
     if denial:
         await finish_denial(recall, bot, event, denial)
 
-    message_id = _last_sent.get(event.group_id)
+    message_id = _last_sent.pop(event.group_id, None)
     if message_id is None:
-        await recall.finish("我还没在本群发过消息，没有可撤回的（只记录本次启动后的消息）。")
+        await recall.finish("没有可撤回的消息了（只记录本次启动后的消息）。")
 
     try:
         await bot.call_api("delete_msg", message_id=message_id)
     except ActionFailed as e:
+        _last_sent[event.group_id] = message_id  # 失败保留，方便再试
         await recall.finish(
             f"撤回失败（{describe_error(e)}）——消息可能已超过 2 分钟或已被撤回。"
         )
     except Exception as e:  # noqa: BLE001
+        _last_sent[event.group_id] = message_id
         await recall.finish(f"撤回请求发送失败：{type(e).__name__}: {e}")
 
-    await recall.finish("🧹 已撤回我上一条消息")
+    # 撤回成功不回复，静默结束（用户要求）
+    await recall.finish()
