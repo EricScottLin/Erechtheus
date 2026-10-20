@@ -36,6 +36,7 @@
 
 from __future__ import annotations
 
+import random
 from datetime import date, timedelta
 from functools import lru_cache
 
@@ -146,6 +147,36 @@ NTH_WEEKDAY: list[tuple[int, int, int, str, float, str]] = [
 LAST_WEEKDAY: list[tuple[int, int, str, float, str]] = [
     (7, 4, "系统管理员日", TIER_5, CAT_NET),
 ]
+
+# 随机倍率日：当天倍率 = fixed × 2^n，n 由日期做种子抽（全服同一天同一个数，重启不变）
+# 想换一天的结果，改种子或 direct 覆盖日期即可
+DICE_DAYS: dict[str, dict] = {
+    "10-24": {"fixed": 5, "label": "1024 程序员日", "weights": {1: 35, 2: 28, 3: 20, 4: 10, 5: 5, 6: 2}},
+}
+
+# 每个 2^n 的出处（跟随抽到的数字显示）
+DICE_NOTES: dict[int, str] = {
+    1: "2¹ = 2：唯一的偶质数，二进制只有 0 和 1 两种状态",
+    2: "2² = 4：IPv4 地址正好 4 个字节，所以写成 255.255.255.255 四段",
+    3: "2³ = 8：一个字节 = 8 位（bit），这就是「8 位机」的来历",
+    4: "2⁴ = 16：十六进制一个字符正好 4 bit（半字节），16 位是 8086 的字长",
+    5: "2⁵ = 32：32 位整数上限 2,147,483,647（214 万秒 ≈ 68 年，所以有 2038 问题）",
+    6: "2⁶ = 64：64 位整数上限约 9.2×10¹⁸，现在 CPU 基本都是 64 位",
+}
+
+
+def _roll_n(iso: str, weights: dict[int, int]) -> int:
+    """用日期当种子抽 n —— 同一天所有人同一个结果，重启也不变。"""
+    rng = random.Random(int(iso.replace("-", "")))
+    total = sum(weights.values())
+    x = rng.uniform(0, total)
+    acc = 0
+    for n in sorted(weights):
+        acc += weights[n]
+        if x <= acc:
+            return n
+    return min(weights)
+
 
 # 科普文案：按节日名索引，会出现在 /倍率 和 /签到 里（冷知识向）
 NOTES: dict[str, str] = {
@@ -335,7 +366,7 @@ def calendar(year: int) -> dict[str, dict]:
         mult = min(sum(m for _, m, _ in parts), MAX_STACK)
         tags = [n for n, _, _ in parts]
         notes = [NOTES[n] for n in tags if n in NOTES]
-        table[iso] = {
+        entry = {
             "mult": mult,
             "name": "+".join(tags),
             "tier": tier_name(mult),
@@ -344,6 +375,16 @@ def calendar(year: int) -> dict[str, dict]:
             "cats": list(dict.fromkeys(c for _, _, c in parts)),
             "note": notes[0] if notes else "",
         }
+        spec = DICE_DAYS.get(iso[5:])  # 按 MM-DD 匹配
+        if spec:  # 随机倍率日：fixed × 2^n
+            n = _roll_n(iso, spec["weights"])
+            entry.update(
+                mult=float(spec["fixed"] * 2 ** n),
+                tier=tier_name(float(spec["fixed"] * 2 ** n)),
+                note=DICE_NOTES.get(n, ""),
+                dice={"n": n, "value": 2 ** n, "fixed": spec["fixed"], "label": spec["label"]},
+            )
+        table[iso] = entry
     return table
 
 

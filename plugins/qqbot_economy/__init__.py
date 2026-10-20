@@ -65,6 +65,9 @@ __plugin_meta__ = PluginMetadata(
 
 plugin_config = get_plugin_config(Config)
 
+# 捕鱼日上限最多放大到这里（随机倍率日可能给到 ×320，不封顶会让一天刷出 20 万荣耀）
+FISH_CAP_MULT_MAX = 40.0
+
 KLEOS = "kleos"
 DRACHMA = "drachma"
 FISHCOIN = "fishcoin"
@@ -181,7 +184,13 @@ async def handle_sign(event: MessageEvent) -> None:
         "📜 签到成功",
         f"  获得 {cur.fmt(KLEOS, kleos)}",
     ]
-    if mult_info["mult"] > 1:
+    if mult_info.get("dice"):
+        d = mult_info["dice"]
+        lines.append(
+            f"  🖥 {d['label']}：抽到 2^{d['n']} = {d['value']}，"
+            f"{d['fixed']} × {d['value']} = ×{mult_info['mult']:g}"
+        )
+    elif mult_info["mult"] > 1:
         lines.append(f"  ⚡ {mult_info['name']}加成 ×{mult_info['mult']:g}")
     if base_drachma > 0:
         lines.append(f"  获得 {cur.fmt(DRACHMA, base_drachma)}")
@@ -300,7 +309,11 @@ async def handle_fish(event: MessageEvent) -> None:
         plugin_config.qqbot_economy_fish_kleos_cap_max,
     )
     mult_info = today_multiplier()
-    cap_eff = None if mult_info["uncap"] else int(cap * mult_info["mult"])
+    cap_eff = (
+        None
+        if mult_info.get("uncap")
+        else int(cap * min(mult_info["mult"], FISH_CAP_MULT_MAX))
+    )
     kleos_gain = 0
     fish_kleos_used = 0
     if cap > 0 or cap_eff is None:

@@ -100,6 +100,25 @@ for y in range(2026, 2031):
     hits = [iso for iso, info in f.year_entries(y) if "十三号星期五" in info["tags"]]
     add(f"| {y} | {'、'.join(h[5:] for h in hits)} |")
 add("")
+add("## 随机倍率日：1024 程序员日")
+add("")
+add("10-24 不吃固定的 ×10，而是「联合国日 ×5 × 2^n」：n 用日期做种子抽，")
+add("全服同一天同一个数、重启不变；抽到哪个数，科普就解释哪个数。")
+add("")
+add("| n | 2^n | 概率 | 当天倍率 | 出处 |")
+add("| --- | --- | --- | --- | --- |")
+_pool = f.DICE_DAYS["10-24"]
+for n, w in sorted(_pool["weights"].items()):
+    add(f"| {n} | {2**n} | {w}% | ×{_pool['fixed'] * 2**n:g} | {f.DICE_NOTES[n]} |")
+add("")
+add("| 年份 | 当年 10-24 抽到 | 倍率 |")
+add("| --- | --- | --- |")
+for y in range(2026, 2031):
+    i = f.lookup(date(y, 10, 24))
+    add(f"| {y} | 2^{i['dice']['n']} = {i['dice']['value']} | ×{i['mult']:g} |")
+add("")
+add("捕鱼的日上限最多按 ×40 放大（`FISH_CAP_MULT_MAX`），不然抽到 ×320 一天能刷出 20 万荣耀。")
+add("")
 add("## 科普卡片")
 add("")
 add("`NOTES` 里的冷知识会随 `/倍率` 当日播报和 `/签到` 一起出现（当天有节日时）：")
