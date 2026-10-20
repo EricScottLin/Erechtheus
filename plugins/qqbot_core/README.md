@@ -80,8 +80,7 @@ bot 主在群里 `/发红包 300 3 恭喜发财`：从自己钱包扣 300 月币
 | `qqbot_core_claim_amount` | `100` | 群等级不到最低档时的保底额 |
 | `qqbot_core_discount_per_level` | `0.0001` | 每级荣耀等级带来的折扣（满级约 100%） |
 | `qqbot_core_discount_cap` | `1.0` | 折扣上限（1.0 = 满级全免） |
-| `qqbot_core_claim_multi_group_bonus` | `0.10` | 每多一个共同群的加成 |
-| `qqbot_core_claim_multi_group_bonus_cap` | `0.30` | 多群加成上限 |
+| `qqbot_core_claim_group_weights` | `[1.0,0.25,0.15,0.10,0.05]` | 多群累计权重（按等级降序，最多累计 5 个群） |
 | `qqbot_core_claim_tiers` | `{1:100,20:300,50:600,100:1000}` | 群等级 → 发放档位 |
 | `qqbot_core_at_sender` | `true` | 回复是否 @ 发起者 |
 | `qqbot_core_nickname_max` | `20` | 昵称长度上限 |

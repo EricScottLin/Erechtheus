@@ -23,6 +23,31 @@ def amount_for_level(level: int, tiers: dict[int, int], default_amount: int) -> 
     return best
 
 
+def amount_for_groups(
+    levels: dict[int, int],
+    tiers: dict[int, int],
+    default_amount: int,
+    weights: list[float] | tuple[float, ...] = (1.0, 0.25, 0.15, 0.10, 0.05),
+) -> tuple[int, list[tuple[int, int, float]]]:
+    """多群累计发放额。
+
+    群按成员等级从高到低排序，第 i 个群按 weights[i] 计入：
+      金额 = Σ tier(等级_i) × weights[i]，四舍五入到 10。
+    返回 (总额, [(等级, 该群档位额, 权重), ...])，方便播报明细。
+    """
+    if not levels:
+        return default_amount, []
+    ordered = sorted(levels.values(), reverse=True)[: len(weights)]
+    rows: list[tuple[int, int, float]] = []
+    total = 0.0
+    for level, weight in zip(ordered, weights):
+        base = amount_for_level(level, tiers, default_amount)
+        rows.append((level, base, weight))
+        total += base * weight
+    amount = int(round(total / 10.0) * 10)
+    return max(amount, 0), rows
+
+
 async def claim(
     user_id: str,
     amount: int,

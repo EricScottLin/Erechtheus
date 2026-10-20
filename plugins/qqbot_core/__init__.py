@@ -436,21 +436,22 @@ async def _(bot: Bot, event: MessageEvent):
 
     max_level = max(levels.values())
     group_count = len(levels)
-    bonus = min(
-        max(0, group_count - 1) * plugin_config.qqbot_core_claim_multi_group_bonus,
-        plugin_config.qqbot_core_claim_multi_group_bonus_cap,
-    )
-    base = claim.amount_for_level(
-        max_level,
+    amount, rows = claim.amount_for_groups(
+        levels,
         plugin_config.qqbot_core_claim_tiers,
         plugin_config.qqbot_core_claim_amount,
+        plugin_config.qqbot_core_claim_group_weights,
     )
-    amount = int(round(base * (1 + bonus)))
 
     result = await claim.claim(
         uid,
         amount,
-        {"level": max_level, "groups": group_count, "bonus": round(bonus, 2)},
+        {
+            "level": max_level,
+            "groups": group_count,
+            "levels": sorted(levels.values(), reverse=True),
+            "rows": [[lv, base, w] for lv, base, w in rows],
+        },
         _cap("drachma"),
     )
     if result["status"] == "already":
@@ -459,9 +460,8 @@ async def _(bot: Bot, event: MessageEvent):
         )
     if result["status"] == "capped":
         await claim_cmd.finish("今日月币获取已达上限，明天再来吧")
-    detail = f"最高群等级 {max_level} · {group_count} 个群"
-    if bonus > 0:
-        detail += f" · 多群加成 +{bonus:.0%}"
+    lv_txt = "/".join(str(lv) for lv, _b, _w in rows)
+    detail = f"群等级 {lv_txt} · 累计 {group_count} 个群"
     await claim_cmd.finish(
         f"🎉 领取成功：{fmt('drachma', result['amount'])}（{detail}）"
     )

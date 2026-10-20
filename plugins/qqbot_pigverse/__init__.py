@@ -170,7 +170,10 @@ async def handle_memes(bot: Bot, event: MessageEvent, arg: Message = CommandArg(
         )
         if item is None:
             await memes_cmd.finish("只支持 jpg/png/gif/webp，且不超过 2MB 哦")
-        await memes_cmd.finish(f"收到！入库成功，这是第 {item['id']} 张猪猪表情包 🐷")
+        await memes_cmd.finish(
+            MessageSegment.reply(event.message_id)
+            + f"收到！入库成功，这是第 {item['id']} 张猪猪表情包 🐷"
+        )
 
     total = await memes.count()
     meme = await memes.random_meme()
@@ -416,4 +419,47 @@ async def handle_feed(event: MessageEvent, arg: Message = CommandArg()) -> None:
         f"🌾 你喂了 {pname} 一筐饲料，它满足地哼唧了一声。\n"
         f"好感 Lv.{feed_level(result['fed'])}（{result['fed']} 次）"
         f" · 剩余 {await drachma_balance(uid):,} 🪙"
+    )
+
+
+# ---------------------------------------------------------------- /今日猪猪（复用 rollpig 抽猪流程）
+from nonebot_plugin_rollpig_plus.helpers import (  # noqa: E402
+    get_event_group_id,
+    guard_group_enabled,
+    guard_store_errors,
+    send_rendered_pig,
+)
+from nonebot_plugin_rollpig_plus.reservation_flow import (  # noqa: E402
+    deliver_newly_ready_reservations,
+)
+from nonebot_plugin_rollpig_plus.roll_flow import (  # noqa: E402
+    RECORDED_PIG_RESOURCE_MISSING_TEXT,
+    resolve_daily_pig,
+)
+
+pigpig_cmd = on_command("今日猪猪", aliases={"今日猪"}, priority=5, block=True)
+
+
+@pigpig_cmd.handle()
+@guard_group_enabled(pigpig_cmd)
+@guard_store_errors(pigpig_cmd)
+async def handle_pigpig_cmd(event: MessageEvent) -> None:
+    resolution = await resolve_daily_pig(
+        str(event.user_id), get_event_group_id(event), include_progress=True
+    )
+    if resolution.recorded_pig_missing:
+        await pigpig_cmd.finish(RECORDED_PIG_RESOURCE_MISSING_TEXT)
+    if resolution.missing_resources or not resolution.pig:
+        await pigpig_cmd.finish("猪圈塌房了（数据缺失）")
+    await send_rendered_pig(
+        pigpig_cmd,
+        event,
+        resolution.pig,
+        extra_text=resolution.growth_text,
+        ex_level=resolution.ex_level or 0,
+        after_send=(
+            (lambda: deliver_newly_ready_reservations(str(event.self_id)))
+            if resolution.was_auto_created
+            else None
+        ),
     )
