@@ -31,6 +31,7 @@ from .config import Config
 from . import assets as assets  # noqa: F401
 from . import box as box  # noqa: F401
 from . import features as features  # noqa: F401
+from . import greeting as greeting  # noqa: F401
 from . import kick as kick  # noqa: F401
 from . import mute as mute  # noqa: F401
 from . import permissions as permissions  # noqa: F401  （注册发送记录钩子）
@@ -56,6 +57,7 @@ __plugin_meta__ = PluginMetadata(
 /盒 @用户            查这个人的 QQ 号与跨插件资产
 说「精致睡眠」       随机 6~12 小时禁言自己（管理员可 @别人）
 说「禁言套餐」       随机 1~60 分钟禁言自己（管理员可 @别人）
+说「晚安」/「早安」  记录作息，按睡眠时长发月币（每天一次）
 （复读无需命令：连续 3 个不同用户发相同文本/图片时自动复读）""",
     type="application",
     homepage="https://github.com/nonebot-qqbot",

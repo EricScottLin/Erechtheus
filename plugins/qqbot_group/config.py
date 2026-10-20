@@ -77,6 +77,11 @@ class Config(BaseModel):
         default=60, ge=1, le=1440, description="禁言套餐最大时长（分钟）",
     )
 
+    # ---- 早安/晚安 ----
+    qqbot_group_greeting_reward_enabled: bool = Field(
+        default=True, description="早安/晚安是否按睡眠时长发月币",
+    )
+
     # ---- 复读 ----
     qqbot_group_repeat_enabled: bool = Field(
         default=True, description="是否启用复读",
