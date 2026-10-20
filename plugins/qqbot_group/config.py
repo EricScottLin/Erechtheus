@@ -82,6 +82,20 @@ class Config(BaseModel):
         default=True, description="早安/晚安是否按睡眠时长发月币",
     )
 
+    # ---- 上班/下班/打卡 ----
+    qqbot_group_work_hourly_wage: int = Field(
+        default=10, ge=1, le=1000, description="标准工时月币/小时",
+    )
+    qqbot_group_work_min_minutes: int = Field(
+        default=10, ge=1, le=120, description="最短计薪工时（分钟）",
+    )
+    qqbot_group_work_max_hours: int = Field(
+        default=16, ge=1, le=24, description="单次打卡最长计薪工时（小时）",
+    )
+    qqbot_group_work_holidays: str = Field(
+        default="", description="法定节假日（逗号分隔 YYYY-MM-DD，按 3 倍计薪）",
+    )
+
     # ---- 复读 ----
     qqbot_group_repeat_enabled: bool = Field(
         default=True, description="是否启用复读",

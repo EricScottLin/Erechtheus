@@ -156,6 +156,9 @@ register_feature(
 register_feature(
     "greeting", "早安/晚安", aliases=("早安", "晚安", "作息", "睡眠记录")
 )
+register_feature(
+    "work", "上班打卡", aliases=("上班", "下班", "打卡", "工时")
+)
 
 
 # ---------------------------------------------------------------- 读写

@@ -39,6 +39,7 @@ from . import recall as recall  # noqa: F401
 from . import repeat as repeat  # noqa: F401
 from . import selfmute as selfmute  # noqa: F401
 from . import whole as whole  # noqa: F401
+from . import work as work  # noqa: F401
 
 __plugin_meta__ = PluginMetadata(
     name="群聊管理",
@@ -58,6 +59,7 @@ __plugin_meta__ = PluginMetadata(
 说「精致睡眠」       随机 6~12 小时禁言自己（管理员可 @别人）
 说「禁言套餐」       随机 1~60 分钟禁言自己（管理员可 @别人）
 说「晚安」/「早安」  记录作息，按睡眠时长发月币（每天一次）
+说「上班」/「下班」  打卡计算工时，按劳动法发工资/加班费
 （复读无需命令：连续 3 个不同用户发相同文本/图片时自动复读）""",
     type="application",
     homepage="https://github.com/nonebot-qqbot",
