@@ -66,7 +66,7 @@ __plugin_meta__ = PluginMetadata(
 plugin_config = get_plugin_config(Config)
 
 # 捕鱼日上限最多放大到这里（随机倍率日可能给到 ×320，不封顶会让一天刷出 20 万荣耀）
-FISH_CAP_MULT_MAX = 40.0
+FISH_CAP_MULT_MAX = 320.0
 
 KLEOS = "kleos"
 DRACHMA = "drachma"
@@ -83,7 +83,8 @@ def _event_line(ev: dict) -> str:
     days = int(ev.get("days_left", 0))
     day = iso[5:] if iso[:4] == str(date.today().year) else iso
     when = "明天" if days == 1 else f"{days} 天后"
-    return f"📅 下一个活动：{day} {ev.get('name', '')} ×{float(ev.get('mult', 1)):g}（{when}）"
+    mult = ev.get("range") and f"×{ev['range'][0]:g}~×{ev['range'][1]:g}" or f"×{float(ev.get('mult', 1)):g}"
+    return f"📅 下一个活动：{day} {ev.get('name', '')} {mult}（{when}）"
 
 
 def _best_value(best_name: str) -> int:
@@ -130,7 +131,7 @@ async def handle_sign(event: MessageEvent) -> None:
         user["sign_streak"] + 1 if user["last_sign_in"] == _yesterday_str() else 1
     )
     kleos = cur.kleos_for_sign_in(streak)
-    mult_info = today_multiplier()
+    mult_info = today_multiplier(uid)
     if mult_info["mult"] > 1:
         kleos = int(round(kleos * mult_info["mult"]))
     # 签到给随机少量月币：月币走固定途径、少量发放，捕鱼产出的是独立鱼币
@@ -308,7 +309,7 @@ async def handle_fish(event: MessageEvent) -> None:
         + plugin_config.qqbot_economy_fish_kleos_cap_per_star * max(0, stars_now - 1),
         plugin_config.qqbot_economy_fish_kleos_cap_max,
     )
-    mult_info = today_multiplier()
+    mult_info = today_multiplier(uid)
     cap_eff = (
         None
         if mult_info.get("uncap")

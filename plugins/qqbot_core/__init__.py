@@ -269,7 +269,7 @@ async def _(bot: Bot, event: MessageEvent, arg: Message = CommandArg()):
     text = arg.extract_plain_text().strip()
 
     if not text:
-        info = multipliers.today()
+        info = multipliers.for_user(str(event.get_user_id()))
         name = f"（{info['name']}）" if info["name"] else "（无加成）"
         lines = [f"⚡ 今日荣耀倍率：×{info['mult']:g}{name}"]
         if info.get("dice"):
@@ -284,7 +284,7 @@ async def _(bot: Bot, event: MessageEvent, arg: Message = CommandArg()):
             lines.append("近期加成：")
             for u in ups:
                 span = u["start"] if u["start"] == u["end"] else f"{u['start']}~{u['end'][5:]}"
-                lines.append(f"  {span} ×{u['mult']:g} {u['name']}")
+                lines.append(f"  {span} {multipliers.mult_text(u)} {u['name']}")
         lines.append(
             "/倍率 日历       看节日日历（国庆/除夕 ×20，传统节日 ×10，西方节日 ×5）"
         )
@@ -306,7 +306,7 @@ async def _(bot: Bot, event: MessageEvent, arg: Message = CommandArg()):
             else:
                 head = f"📅 未来 {days} 天节日（共 {len(rows)} 天）："
                 shown = rows[:40]
-                body = [f"  {d[5:]} ×{i['mult']:g} {i['name']}" for d, i in shown]
+                body = [f"  {d[5:]} {multipliers.mult_text(i)} {i['name']}" for d, i in shown]
                 if len(rows) > len(shown):
                     body.append(f"  …还有 {len(rows) - len(shown)} 天")
                 msg = "\n".join([head, *body])

@@ -151,7 +151,23 @@ LAST_WEEKDAY: list[tuple[int, int, str, float, str]] = [
 # 随机倍率日：当天倍率 = fixed × 2^n，n 由日期做种子抽（全服同一天同一个数，重启不变）
 # 想换一天的结果，改种子或 direct 覆盖日期即可
 DICE_DAYS: dict[str, dict] = {
-    "10-24": {"fixed": 5, "label": "1024 程序员日", "weights": {1: 35, 2: 28, 3: 20, 4: 10, 5: 5, 6: 2}},
+    "10-24": {
+        "fixed": 5,
+        "label": "1024 程序员日",
+        # n: 概率(%)，2^n 是手里的牌，fixed × 2^n 是当天倍率
+        "weights": {
+            1: 35.0,   # ×10
+            2: 28.0,   # ×20
+            3: 20.0,   # ×40
+            4: 10.0,   # ×80
+            5: 5.0,    # ×160
+            6: 1.7,    # ×320
+            7: 0.2,    # ×640
+            8: 0.06,   # ×1280
+            9: 0.03,   # ×2560
+            10: 0.01,  # ×5120  传说中的 1024，万分之一
+        },
+    },
 }
 
 # 每个 2^n 的出处（跟随抽到的数字显示）
@@ -162,12 +178,20 @@ DICE_NOTES: dict[int, str] = {
     4: "2⁴ = 16：十六进制一个字符正好 4 bit（半字节），16 位是 8086 的字长",
     5: "2⁵ = 32：32 位整数上限 2,147,483,647（214 万秒 ≈ 68 年，所以有 2038 问题）",
     6: "2⁶ = 64：64 位整数上限约 9.2×10¹⁸，现在 CPU 基本都是 64 位",
+    7: "2⁷ = 128：IPv6 地址 128 位，AES-128 的密钥也是 128 位",
+    8: "2⁸ = 256：一个字节 8 位能表示 0~255 共 256 个值，ASCII 正好占满",
+    9: "2⁹ = 512：传统机械硬盘一个扇区 512 字节，MBR 分区表也塞在 512 字节里",
+    10: "2¹⁰ = 1024：1 KiB，程序员的浪漫数字；今天你抽到的就是它",
 }
 
 
-def _roll_n(iso: str, weights: dict[int, int]) -> int:
-    """用日期当种子抽 n —— 同一天所有人同一个结果，重启也不变。"""
-    rng = random.Random(int(iso.replace("-", "")))
+def roll_n(iso: str, weights: dict[int, float], salt: str = "") -> int:
+    """抽 n。
+
+    salt 为空 → 按日期抽（展示用，全服同一个数）；
+    salt = uid → 每人一个种子，同一个人当天结果固定，重启也不变。
+    """
+    rng = random.Random(f"{iso}|{salt}" if salt else iso)
     total = sum(weights.values())
     x = rng.uniform(0, total)
     acc = 0
@@ -377,12 +401,16 @@ def calendar(year: int) -> dict[str, dict]:
         }
         spec = DICE_DAYS.get(iso[5:])  # 按 MM-DD 匹配
         if spec:  # 随机倍率日：fixed × 2^n
-            n = _roll_n(iso, spec["weights"])
+            n = roll_n(iso, spec["weights"])
             entry.update(
                 mult=float(spec["fixed"] * 2 ** n),
                 tier=tier_name(float(spec["fixed"] * 2 ** n)),
                 note=DICE_NOTES.get(n, ""),
                 dice={"n": n, "value": 2 ** n, "fixed": spec["fixed"], "label": spec["label"]},
+                range=[
+                    float(spec["fixed"] * 2 ** min(spec["weights"])),
+                    float(spec["fixed"] * 2 ** max(spec["weights"])),
+                ],
             )
         table[iso] = entry
     return table

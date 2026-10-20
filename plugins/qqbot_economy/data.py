@@ -126,9 +126,12 @@ async def spend(
     return await get_user(user_id) if ok else None
 
 
-def today_multiplier() -> dict:
-    """今天的荣耀倍率（周末/节日/自定义）。"""
-    return require_core().multipliers.today()
+def today_multiplier(uid: str = "") -> dict:
+    """今天的荣耀倍率（周末/节日/自定义）；随机倍率日按用户单独抽。"""
+    core = require_core()
+    if uid:
+        return core.multipliers.for_user(str(uid))
+    return core.multipliers.today()
 
 
 def next_event() -> dict | None:
