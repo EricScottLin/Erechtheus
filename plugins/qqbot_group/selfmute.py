@@ -10,6 +10,7 @@
 """
 
 import random
+import re
 from dataclasses import dataclass
 
 from nonebot import on_message
@@ -80,9 +81,27 @@ _KEYWORD_MAP: tuple[tuple[str, MutePreset], ...] = tuple(
 )
 
 
+def _normalize(text: str) -> str:
+    """去掉空白与首尾标点，便于整句匹配。"""
+    t = (text or "").strip()
+    t = re.sub(r"\s+", "", t)
+    return t.strip("~～!！。.，,")
+
+
+# 只认「整句就是套餐」或「给我来份 XX」这类明确句式；
+# 句子中间顺带提到「坐牢」「自闭」不会触发（避免误判）。
+_PREFIX_RE = r"(?:(?:给我来份|给我|来份|来一个|要一份|整一份|安排|请给我|给|帮|个))*"
+_SUFFIX_RE = r"(?:套餐)?(?:吧|啦|了|咯|喽|谢谢)*"
+_KW_ALTERNATION = "|".join(re.escape(k) for k, _ in _KEYWORD_MAP)
+_SELF_MUTE_RE = re.compile(rf"^{_PREFIX_RE}(?:{_KW_ALTERNATION}){_SUFFIX_RE}$")
+
+
 def match_preset(text: str) -> MutePreset | None:
+    normalized = _normalize(text)
+    if not normalized or not _SELF_MUTE_RE.match(normalized):
+        return None
     for keyword, preset in _KEYWORD_MAP:
-        if keyword in text:
+        if keyword in normalized:
             return preset
     return None
 

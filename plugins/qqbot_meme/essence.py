@@ -81,13 +81,27 @@ async def sync_once(bot: Bot) -> tuple[int, int]:
                 continue
 
             text = extract_text(msg)
-            if not text or text in existing:
+            if not text:
                 continue
 
             author = str(item.get("sender_nick") or "").strip() or None
             group_name = msg.get("group_name") if isinstance(msg, dict) else None
+            sender_id = item.get("sender_id")
+            author_id = str(sender_id) if sender_id is not None else None
+
+            if text in existing:
+                # 早期导入的条目没有 author_id，这里顺带回填
+                await library.set_author_by_text(
+                    group_id, text, author, author_id
+                )
+                continue
+
             await library.append_quote(
-                text, author=author, group_id=group_id, group_name=group_name
+                text,
+                author=author,
+                group_id=group_id,
+                group_name=group_name,
+                author_id=str(sender_id) if sender_id is not None else None,
             )
             existing.add(text)
             added += 1

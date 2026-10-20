@@ -143,6 +143,11 @@ def _entries_from(raw: list) -> list[dict]:
         entry: dict = {"text": str(item["text"]).strip()}
         if item.get("author"):
             entry["author"] = str(item["author"]).strip()
+        if item.get("author_id") is not None:
+            try:
+                entry["author_id"] = str(item["author_id"]).strip()
+            except (TypeError, ValueError):
+                pass
         if item.get("group_id") is not None:
             try:
                 entry["group_id"] = int(item["group_id"])
@@ -181,11 +186,68 @@ def random_quote_entry(group_id: int | None = None) -> dict | None:
     return random.choice(entries) if entries else None
 
 
+async def set_author_by_text(
+    group_id: int | None,
+    text: str,
+    author: str | None,
+    author_id: str | None,
+) -> bool:
+    """给已存在但缺 author_id 的条目回填作者信息（早期数据迁移用）。"""
+    if not author_id:
+        return False
+    text = text.strip()
+    if not text:
+        return False
+    async with _quote_lock:
+        raw = _load_raw_quotes()
+        changed = False
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("text") or "").strip() != text:
+                continue
+            if item.get("author_id"):
+                continue
+            if group_id is not None and item.get("group_id") not in (None, int(group_id)):
+                continue
+            item["author_id"] = str(author_id)
+            if author:
+                item["author"] = author
+            changed = True
+        if changed:
+            path = quotes_file()
+            tmp = path.with_suffix(".tmp")
+            tmp.write_text(
+                json.dumps(raw, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            tmp.replace(path)
+        return changed
+
+
+def quotes_by_user(
+    group_id: int | None, user_id: str, names: list[str] | None = None
+) -> list[dict]:
+    """查某用户在指定群说过的金句。
+
+    优先按 ``author_id`` 精确匹配；旧数据没有 author_id 时退回群名片/昵称匹配。
+    """
+    entries = _filter_group(_entries(), group_id)
+    uid = str(user_id)
+    matched = [e for e in entries if str(e.get("author_id") or "") == uid]
+    if not matched and names:
+        wanted = {n.strip() for n in names if n and n.strip()}
+        if wanted:
+            matched = [e for e in entries if e.get("author") in wanted]
+    return matched
+
+
 async def append_quote(
     text: str,
     author: str | None = None,
     group_id: int | None = None,
     group_name: str | None = None,
+    author_id: str | None = None,
 ) -> int:
     """追加一条金句，返回该群的金句总数。
 
@@ -195,6 +257,8 @@ async def append_quote(
     entry: dict = {"text": text.strip()}
     if author:
         entry["author"] = author
+    if author_id:
+        entry["author_id"] = str(author_id)
     if group_id is not None:
         entry["group_id"] = int(group_id)
     if group_name:
