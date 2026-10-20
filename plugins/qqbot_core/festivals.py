@@ -50,6 +50,7 @@ CAT_NET = "互联网"
 CATS = [CAT_TRAD, CAT_STAT, CAT_WEST, CAT_PUBLIC, CAT_NET]
 
 TIER_20 = 20.0
+TIER_13 = 13.0  # 十三号星期五：玄学档
 TIER_10 = 10.0
 TIER_5 = 5.0
 
@@ -62,6 +63,8 @@ def tier_name(mult: float) -> str:
     mult = float(mult)
     if mult == 2.0:
         return "周末"
+    if mult == 13.0:
+        return "玄学"
     if mult >= 20:
         return "红日"
     if mult >= 10:
@@ -158,6 +161,7 @@ NOTES: dict[str, str] = {
     "世界表情包日": "7-17，因为最早的 emoji 日历表情显示的就是 7 月 17 日",
     "系统管理员日": "7 月最后一个周五，感谢那些半夜被叫起来重启服务器的人",
     "地球日": "4-22，1970 年第一届，现在有 190 多个国家参与",
+    "十三号星期五": "13 在西方是不吉利的数字（最后的晚餐 13 人），13 号撞上周五就叫黑色星期五；一年 1~3 次",
 }
 
 
@@ -291,6 +295,12 @@ def calendar(year: int) -> dict[str, dict]:
     for month, weekday, name, mult, cat in LAST_WEEKDAY:
         put(_last_weekday(year, month, weekday).isoformat(), name, mult, cat)
 
+    # 十三号星期五：13 号且周五，一年 1~3 次
+    for month in range(1, 13):
+        d13 = date(year, month, 13)
+        if d13.weekday() == 4:
+            put(d13.isoformat(), "十三号星期五", TIER_13, CAT_WEST)
+
     # 世界程序员节：一年第 256 天（2^8）—— 闰年自动落到 9-12
     put((date(year, 1, 1) + timedelta(days=255)).isoformat(), "世界程序员节", TIER_5, CAT_NET)
 
@@ -330,6 +340,7 @@ def calendar(year: int) -> dict[str, dict]:
             "name": "+".join(tags),
             "tier": tier_name(mult),
             "tags": tags,
+            "parts": [(n, m) for n, m, _ in parts],
             "cats": list(dict.fromkeys(c for _, _, c in parts)),
             "note": notes[0] if notes else "",
         }
