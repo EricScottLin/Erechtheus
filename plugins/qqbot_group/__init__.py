@@ -28,6 +28,7 @@ from nonebot.plugin import PluginMetadata
 from .config import Config
 
 # 导入即注册各自的事件响应器（NoneBot 分包插件写法）
+from . import box as box  # noqa: F401
 from . import features as features  # noqa: F401
 from . import kick as kick  # noqa: F401
 from . import mute as mute  # noqa: F401
@@ -50,6 +51,7 @@ __plugin_meta__ = PluginMetadata(
 /本群功能            查看本群功能开关
 /开启 <功能>         开启本群某功能（管理员）
 /关闭 <功能>         关闭本群某功能（管理员）
+/盒 @用户            查这个人的 QQ 号
 （复读无需命令：连续 3 个不同用户发相同文本/图片时自动复读）""",
     type="application",
     homepage="https://github.com/nonebot-qqbot",

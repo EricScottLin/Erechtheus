@@ -1,36 +1,16 @@
 """撤回命令：/撤（撤回机器人自己上一条消息）。"""
 
-from nonebot import get_driver, on_command
+from nonebot import on_command
 from nonebot.adapters.onebot.v11 import ActionFailed, Bot, GroupMessageEvent
-from nonebot.rule import Rule
+from .rules import explicit_prefix_or_at
 
 from .permissions import _last_sent, check_sender_admin, describe_error, finish_denial
-
-
-def _recall_trigger_rule() -> Rule:
-    """只允许「显式命令前缀」或「@机器人」触发 /撤。
-
-    本项目 COMMAND_START 含 ""，裸的「撤」「撤回」在群聊里太容易误触发，
-    因此排除裸词；但 ``@机器人 撤`` 会被 OneBot 适配器剥掉 @ 段后触发
-    （``event.to_me`` 为 True），这是允许的。
-    """
-    starts = tuple(s for s in get_driver().config.command_start if s)
-
-    async def _checker(event) -> bool:
-        if getattr(event, "to_me", False):
-            return True
-        if not starts:
-            return True
-        text = event.get_plaintext().lstrip()
-        return any(text.startswith(s) for s in starts)
-
-    return Rule(_checker)
 
 
 recall = on_command(
     "撤",
     aliases={"撤回"},
-    rule=_recall_trigger_rule(),
+    rule=explicit_prefix_or_at(),
     priority=5,
     block=True,
 )
