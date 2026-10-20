@@ -27,25 +27,22 @@ def amount_for_groups(
     levels: dict[int, int],
     tiers: dict[int, int],
     default_amount: int,
-    weights: list[float] | tuple[float, ...] = (1.0, 0.25, 0.15, 0.10, 0.05),
-) -> tuple[int, list[tuple[int, int, float]]]:
-    """多群累计发放额。
+    max_groups: int = 5,
+) -> tuple[int, list[int], int]:
+    """多群等级累计发放额。
 
-    群按成员等级从高到低排序，第 i 个群按 weights[i] 计入：
-      金额 = Σ tier(等级_i) × weights[i]，四舍五入到 10。
-    返回 (总额, [(等级, 该群档位额, 权重), ...])，方便播报明细。
+    把（最多 max_groups 个）群的成员等级**相加**得到累计等级，
+    再按累计等级查档位表 —— 所以单个群刷到 100 级只有 1000，
+    想拿更高档必须真的在多个群里都有等级。
+
+    返回 (发放额, 参与累计的等级列表(降序), 累计等级)。
     """
     if not levels:
-        return default_amount, []
-    ordered = sorted(levels.values(), reverse=True)[: len(weights)]
-    rows: list[tuple[int, int, float]] = []
-    total = 0.0
-    for level, weight in zip(ordered, weights):
-        base = amount_for_level(level, tiers, default_amount)
-        rows.append((level, base, weight))
-        total += base * weight
-    amount = int(round(total / 10.0) * 10)
-    return max(amount, 0), rows
+        return default_amount, [], 0
+    ordered = sorted(levels.values(), reverse=True)[: max(0, int(max_groups))]
+    total_level = sum(ordered)
+    amount = amount_for_level(total_level, tiers, default_amount)
+    return amount, ordered, total_level
 
 
 async def claim(

@@ -436,11 +436,11 @@ async def _(bot: Bot, event: MessageEvent):
 
     max_level = max(levels.values())
     group_count = len(levels)
-    amount, rows = claim.amount_for_groups(
+    amount, counted, total_level = claim.amount_for_groups(
         levels,
         plugin_config.qqbot_core_claim_tiers,
         plugin_config.qqbot_core_claim_amount,
-        plugin_config.qqbot_core_claim_group_weights,
+        plugin_config.qqbot_core_claim_max_groups,
     )
 
     result = await claim.claim(
@@ -449,8 +449,8 @@ async def _(bot: Bot, event: MessageEvent):
         {
             "level": max_level,
             "groups": group_count,
-            "levels": sorted(levels.values(), reverse=True),
-            "rows": [[lv, base, w] for lv, base, w in rows],
+            "counted": counted,
+            "total_level": total_level,
         },
         _cap("drachma"),
     )
@@ -460,8 +460,8 @@ async def _(bot: Bot, event: MessageEvent):
         )
     if result["status"] == "capped":
         await claim_cmd.finish("今日月币获取已达上限，明天再来吧")
-    lv_txt = "/".join(str(lv) for lv, _b, _w in rows)
-    detail = f"群等级 {lv_txt} · 累计 {group_count} 个群"
+    lv_txt = "+".join(str(lv) for lv in counted)
+    detail = f"群等级 {lv_txt} = {total_level} · 累计 {len(counted)} 个群"
     await claim_cmd.finish(
         f"🎉 领取成功：{fmt('drachma', result['amount'])}（{detail}）"
     )
@@ -589,8 +589,7 @@ async def _(bot: Bot, event: MessageEvent):
         f"领金币活动   {'✅ 开放中' if enabled else '⛔ 已关闭'}（{source}）",
         f"群等级档位   {tiers}",
         f"保底发放     {plugin_config.qqbot_core_claim_amount} 月币",
-        f"多群加成     每多 1 群 +{plugin_config.qqbot_core_claim_multi_group_bonus:.0%}"
-        f"（封顶 +{plugin_config.qqbot_core_claim_multi_group_bonus_cap:.0%}）",
+        f"多群累计     最多 {plugin_config.qqbot_core_claim_max_groups} 个群，等级相加后查档",
         f"日获取上限   {caps}",
         f"白名单       {whitelist}",
         f"bot 主       {supers}",

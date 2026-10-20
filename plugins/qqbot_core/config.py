@@ -46,13 +46,22 @@ class Config(BaseModel):
         default=100, ge=0, description="群等级不到最低档时的保底发放额"
     )
     qqbot_core_claim_tiers: dict[int, int] = Field(
-        default_factory=lambda: {1: 100, 20: 300, 50: 600, 100: 1000},
-        description="群等级 → 发放额档位（取不超过等级的最高档）",
+        default_factory=lambda: {
+            1: 100,
+            20: 300,
+            50: 600,
+            100: 1000,
+            150: 1200,
+            200: 1400,
+            300: 1800,
+            400: 2100,
+            500: 2400,
+        },
+        description="累计群等级 → 发放额档位（取不超过累计等级的最高档）",
     )
-    qqbot_core_claim_group_weights: list[float] = Field(
-        default_factory=lambda: [1.0, 0.25, 0.15, 0.10, 0.05],
-        description=(
-            "多群累计权重：群按等级从高到低排序，第 1/2/3… 个群分别按这个比例计入发放额，"
-            "列表长度就是最多累计的群数（默认 5 个群，权重 100%/25%/15%/10%/5%）"
-        ),
+    qqbot_core_claim_max_groups: int = Field(
+        default=5,
+        ge=1,
+        le=20,
+        description="最多累计几个群的等级（群按等级从高到低取）",
     )
