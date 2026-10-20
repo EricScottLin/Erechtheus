@@ -198,6 +198,8 @@ async def handle_sign(event: MessageEvent) -> None:
         )
     else:
         lines.append(f"  ── 今日合计：{cur.fmt(KLEOS, kleos)}")
+    if mult_info.get("note"):
+        lines.append(f"💡 {mult_info['note']}")
     # 进行中的限时活动提醒（由 qqbot_core 判断，失败不影响签到）
     lines += await sign_in_reminders(uid)
     # 下一个活动 + 当天预设倍率

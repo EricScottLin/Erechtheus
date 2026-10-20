@@ -272,6 +272,8 @@ async def _(bot: Bot, event: MessageEvent, arg: Message = CommandArg()):
         info = multipliers.today()
         name = f"（{info['name']}）" if info["name"] else "（无加成）"
         lines = [f"⚡ 今日荣耀倍率：×{info['mult']:g}{name}"]
+        if info.get("note"):
+            lines.append(f"  💡 {info['note']}")
         ups = multipliers.upcoming()
         if ups:
             lines.append("近期加成：")

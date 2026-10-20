@@ -135,12 +135,31 @@ NTH_WEEKDAY: list[tuple[int, int, int, str, float, str]] = [
     (5, 6, 2, "母亲节", TIER_5, CAT_WEST),
     (6, 6, 3, "父亲节", TIER_5, CAT_WEST),
     (11, 3, 4, "感恩节", TIER_5, CAT_WEST),
+    (9, 5, 3, "软件自由日", TIER_5, CAT_NET),   # 9 月第三个周六
+    (10, 1, 2, "Ada 洛芙莱斯日", TIER_5, CAT_NET),  # 10 月第二个周二
 ]
 
 # (月, 周几 0=周一, 名称, 倍率, 分类) —— 某月最后一个周几
 LAST_WEEKDAY: list[tuple[int, int, str, float, str]] = [
     (7, 4, "系统管理员日", TIER_5, CAT_NET),
 ]
+
+# 科普文案：按节日名索引，会出现在 /倍率 和 /签到 里（冷知识向）
+NOTES: dict[str, str] = {
+    "程序员日": "1024 = 2¹⁰，所以 1 KiB = 1024 B；硬盘厂商按 1000 算，1TB 到手只有 931GB",
+    "世界程序员节": "一年的第 256 天 = 2⁸ = 0x100，俄罗斯的程序员节；闰年会提前到 9-12",
+    "软件自由日": "开源运动的全球纪念日（9 月第三个周六），GNU 与 Linux 都从这场运动里长出来",
+    "Ada 洛芙莱斯日": "Ada 在 1843 年写下史上第一个算法，被公认为第一位程序员；10 月第二个周二",
+    "π Day": "π ≈ 3.1415926，3-14 是 π Day；也恰好是爱因斯坦生日",
+    "520": "520 的谐音是\"我爱你\"，2010 年前后被网民炒成网络情人节",
+    "双11": "11-11 原本是光棍节（四个 1），2010 年被电商改成购物节",
+    "双12": "双11 的补档，专治\"双11 没抢到\"",
+    "618": "京东店庆日（6 月 18 日），后来变成年中大促",
+    "世界表情包日": "7-17，因为最早的 emoji 日历表情显示的就是 7 月 17 日",
+    "系统管理员日": "7 月最后一个周五，感谢那些半夜被叫起来重启服务器的人",
+    "地球日": "4-22，1970 年第一届，现在有 190 多个国家参与",
+}
+
 
 # ---------------------------------------------------------------- 农历 / 节气（按年抄）
 # (日期, 名称, 倍率)
@@ -272,6 +291,9 @@ def calendar(year: int) -> dict[str, dict]:
     for month, weekday, name, mult, cat in LAST_WEEKDAY:
         put(_last_weekday(year, month, weekday).isoformat(), name, mult, cat)
 
+    # 世界程序员节：一年第 256 天（2^8）—— 闰年自动落到 9-12
+    put((date(year, 1, 1) + timedelta(days=255)).isoformat(), "世界程序员节", TIER_5, CAT_NET)
+
     # 黑色星期五 = 感恩节次日
     thanksgiving = _nth_weekday(year, 11, 3, 4)
     put((thanksgiving + timedelta(days=1)).isoformat(), "黑色星期五", TIER_5, CAT_WEST)
@@ -301,12 +323,15 @@ def calendar(year: int) -> dict[str, dict]:
     table: dict[str, dict] = {}
     for iso, parts in cells.items():
         mult = min(sum(m for _, m, _ in parts), MAX_STACK)
+        tags = [n for n, _, _ in parts]
+        notes = [NOTES[n] for n in tags if n in NOTES]
         table[iso] = {
             "mult": mult,
-            "name": "+".join(n for n, _, _ in parts),
+            "name": "+".join(tags),
             "tier": tier_name(mult),
-            "tags": [n for n, _, _ in parts],
+            "tags": tags,
             "cats": list(dict.fromkeys(c for _, _, c in parts)),
+            "note": notes[0] if notes else "",
         }
     return table
 
