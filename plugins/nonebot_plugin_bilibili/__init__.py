@@ -107,11 +107,17 @@ _CONFIRM_RE = re.compile(
     r"^(?:y|yes|好|要|发|发送|确认|可以|行|嗯|发吧)(?:\s*(360|480|720|1080)\s*p?)?$",
     re.I,
 )
+# 别人发的链接：群里任何人也回 y 就能触发，但只认「y/yes」这种明确写法，
+# 避免「嗯」「好」「行」这种日常词误触发下载。
+_STRICT_CONFIRM_RE = re.compile(
+    r"^(?:y|yes|yy)(?:\s*(360|480|720|1080)\s*p?)?$",
+    re.I,
+)
 
 HELP = (
     "📺 B站助手用法\n"
     "────────────\n"
-    "① 群里发B站链接 → 我给出信息卡，回「y」就把压缩版视频发到群里\n"
+    "① 群里发B站链接 → 我给出信息卡，回「y」就把压缩版视频发到群里（同群谁回都行）\n"
     "   想要更高画质：回「y 720p」或「y 1080p」（需配 B 站账号 Cookie）\n"
     "   私聊直接发链接，同样回 y\n"
     "② /bilibili rank [分区] [条数] —— 今日排行榜\n"
@@ -421,10 +427,11 @@ async def _confirm_rule(event, state: T_State) -> bool:
     p = _PENDING.get(ck)
     if not p or p["expire"] < time.time():
         return False
-    if str(event.user_id) != str(p["user"]):
-        return False
+    # 发链接的人可以用「好/嗯/发吧」等宽松写法；同群其他人也能回，
+    # 但只认「y / y 720p」这类明确写法（防止日常聊天里的「嗯」「行」误触发）。
+    same_user = str(event.user_id) == str(p["user"])
     text = _clean(event.get_plaintext()).strip().lower()
-    m = _CONFIRM_RE.match(text)
+    m = (_CONFIRM_RE if same_user else _STRICT_CONFIRM_RE).match(text)
     if not m:
         return False
     state["bili_meta"] = p["meta"]
