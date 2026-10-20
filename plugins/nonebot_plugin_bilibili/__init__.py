@@ -606,3 +606,12 @@ bili_at_cmd = on_message(rule=Rule(_at_cmd_rule), priority=3, block=True)
 @bili_at_cmd.handle()
 async def _handle_at_cmd(event, bot, state: T_State):
     await _run_command_flow(event, bot, state["bili_arg"])
+
+
+# ---------- ⑤ 启动日志：确认 B站账号 Cookie 是否生效 ----------
+@get_driver().on_startup
+async def _log_account_status():
+    if sender.has_account():
+        logger.info("[bilibili] 已配置 BILI_SESSDATA：可请求 720P（1080P 还需大会员）")
+    else:
+        logger.info("[bilibili] 未配置 BILI_SESSDATA：画质上限 480P（配了才能 y 720p / y 1080p）")

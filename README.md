@@ -67,7 +67,8 @@ LLBot 的 WebUI(3081) 与 OneBot WS(3001) 由配置文件强制绑定 `127.0.0.1
 实现要点（踩坑记录见 `plugins/nonebot_plugin_bilibili/README.md`）：
 
 - 视频详情走 **wbi 签名的 `x/web-interface/wbi/view`** —— 裸 `view` 接口从机房 IP 请求会 412
-- 播放地址走 `x/player/playurl`（匿名可拿 480P/720P，1080P 需登录）
+- 播放地址走 `x/player/playurl`：**匿名最高只有 480P**（实测请求 qn=64/80 也只回
+  360P/480P），配了 `BILI_SESSDATA` 才能拿 720P，1080P 还要大会员
 - **ffmpeg 直连 CDN 边下边转**（带 Referer/UA），不再「先下载完再转码」——
   2026-10 实测同一视频从 23s 降到 14.7s / 43s 降到 17.5s
 - 发送用 `base64://` 交给 LLBot（LLOneBot 的 `uri2local` 支持 base64/http/file 三种）
