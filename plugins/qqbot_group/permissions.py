@@ -42,16 +42,8 @@ def check_sender_admin(bot: Bot, event: GroupMessageEvent) -> str | None:
     return None
 
 
-async def check_admin(bot: Bot, event: GroupMessageEvent) -> str | None:
-    """统一权限闸门：发送者权限 + 机器人自身管理员权限。
-
-    返回 ``None`` 表示放行；否则返回应当回复给用户的拒绝原因。
-    """
-    denial = check_sender_admin(bot, event)
-    if denial:
-        return denial
-
-    # 机器人自身必须在本群有管理员权限
+async def check_bot_admin(bot: Bot, event: GroupMessageEvent) -> str | None:
+    """仅校验机器人自身是否是本群管理员。"""
     try:
         info = await bot.call_api(
             "get_group_member_info",
@@ -67,6 +59,17 @@ async def check_admin(bot: Bot, event: GroupMessageEvent) -> str | None:
     if role not in ("admin", "owner"):
         return "我在本群还不是管理员，没有禁言/移出权限，请让群主给我一个管理员。"
     return None
+
+
+async def check_admin(bot: Bot, event: GroupMessageEvent) -> str | None:
+    """统一权限闸门：发送者权限 + 机器人自身管理员权限。
+
+    返回 ``None`` 表示放行；否则返回应当回复给用户的拒绝原因。
+    """
+    denial = check_sender_admin(bot, event)
+    if denial:
+        return denial
+    return await check_bot_admin(bot, event)
 
 
 async def finish_denial(matcher, bot: Bot, event: GroupMessageEvent, reason: str) -> None:

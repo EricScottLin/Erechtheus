@@ -149,6 +149,9 @@ register_feature("poke", "戳一戳表情", aliases=("戳一戳", "拍一拍", "
 register_feature("quotes", "金句", aliases=("金句库",))
 register_feature("meme", "表情包", aliases=("表情", "/表情"))
 register_feature("box", "盒（查QQ/资产）", aliases=("开盒", "查QQ", "查资产"))
+register_feature(
+    "selfmute", "禁言套餐/精致睡眠", aliases=("精致睡眠", "禁言套餐", "睡眠")
+)
 
 
 # ---------------------------------------------------------------- 读写

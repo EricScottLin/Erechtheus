@@ -63,6 +63,20 @@ class Config(BaseModel):
         description="额外允许使用群管命令的 QQ 号集合",
     )
 
+    # ---- 禁言套餐 / 精致睡眠 ----
+    qqbot_group_sleep_min_hours: int = Field(
+        default=6, ge=1, le=24, description="精致睡眠最小时长（小时）",
+    )
+    qqbot_group_sleep_max_hours: int = Field(
+        default=12, ge=1, le=24, description="精致睡眠最大时长（小时）",
+    )
+    qqbot_group_package_min_minutes: int = Field(
+        default=1, ge=1, le=1440, description="禁言套餐最小时长（分钟）",
+    )
+    qqbot_group_package_max_minutes: int = Field(
+        default=60, ge=1, le=1440, description="禁言套餐最大时长（分钟）",
+    )
+
     # ---- 复读 ----
     qqbot_group_repeat_enabled: bool = Field(
         default=True, description="是否启用复读",
@@ -89,10 +103,16 @@ class Config(BaseModel):
         return _to_int_set(value)
 
     @model_validator(mode="after")
-    def _check_smoke_range(self) -> "Config":
+    def _check_ranges(self) -> "Config":
         if self.qqbot_group_smoke_min_seconds > self.qqbot_group_smoke_max_seconds:
             raise ValueError(
                 "qqbot_group_smoke_min_seconds 不能大于 qqbot_group_smoke_max_seconds"
+            )
+        if self.qqbot_group_sleep_min_hours > self.qqbot_group_sleep_max_hours:
+            raise ValueError("qqbot_group_sleep_min_hours 不能大于 sleep_max_hours")
+        if self.qqbot_group_package_min_minutes > self.qqbot_group_package_max_minutes:
+            raise ValueError(
+                "qqbot_group_package_min_minutes 不能大于 package_max_minutes"
             )
         return self
 

@@ -36,6 +36,7 @@ from . import mute as mute  # noqa: F401
 from . import permissions as permissions  # noqa: F401  （注册发送记录钩子）
 from . import recall as recall  # noqa: F401
 from . import repeat as repeat  # noqa: F401
+from . import selfmute as selfmute  # noqa: F401
 from . import whole as whole  # noqa: F401
 
 __plugin_meta__ = PluginMetadata(
@@ -53,6 +54,8 @@ __plugin_meta__ = PluginMetadata(
 /开启 <功能>         开启本群某功能（管理员）
 /关闭 <功能>         关闭本群某功能（管理员）
 /盒 @用户            查这个人的 QQ 号与跨插件资产
+说「精致睡眠」       随机 6~12 小时禁言自己（管理员可 @别人）
+说「禁言套餐」       随机 1~60 分钟禁言自己（管理员可 @别人）
 （复读无需命令：连续 3 个不同用户发相同文本/图片时自动复读）""",
     type="application",
     homepage="https://github.com/nonebot-qqbot",
