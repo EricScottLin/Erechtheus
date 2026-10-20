@@ -148,7 +148,7 @@ register_feature("repeat", "复读", aliases=("复读机",))
 register_feature("poke", "戳一戳表情", aliases=("戳一戳", "拍一拍", "戳一戳回图"))
 register_feature("quotes", "金句", aliases=("金句库",))
 register_feature("meme", "表情包", aliases=("表情", "/表情"))
-register_feature("box", "盒", aliases=("开盒", "查QQ"))
+register_feature("box", "盒（查QQ/资产）", aliases=("开盒", "查QQ", "查资产"))
 
 
 # ---------------------------------------------------------------- 读写

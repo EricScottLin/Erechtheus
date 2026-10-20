@@ -58,6 +58,41 @@ if not features.is_enabled(group_id, "my_feature"):
     return
 ```
 
+## 资产聚合（/盒）
+
+`/盒 @用户` 会遍历所有已注册的资产来源，把该用户在各插件里的家底拼到一起：
+
+```
+📦 开盒成功：@某人 的 QQ 是 123456
+──── 资产 ────
+【qqbot_core】
+🏛 荣耀：102
+🌙 月币：90,188
+🐟 鱼币：80
+【qqbot_economy】
+📅 签到：连续 1 天 · 累计 1 天
+🎣 鱼竿 Lv1 · 鱼饵 0
+🐟 累计钓鱼 1 条 · 最佳 月光比目
+【qqbot_pigverse】
+🐷 猪猪图鉴：2 只
+```
+
+内置来源：`qqbot_core` 钱包、`qqbot_economy` 玩法数据、`qqbot_pigverse` 猪猪宇宙。
+其他插件可以注册自己的资产来源：
+
+```python
+from nonebot import get_plugin
+
+assets = get_plugin("qqbot_group").module.assets
+
+async def my_assets(uid: str) -> list[str]:
+    return [f"我的代币：{...}"]
+
+assets.register_asset_provider("my_plugin", my_assets)
+```
+
+单个来源异常会被跳过，不影响其他来源。
+
 ## 复读
 
 无需命令：同一群内连续 **`qqbot_group_repeat_times` 个不同用户**（默认 3 人）

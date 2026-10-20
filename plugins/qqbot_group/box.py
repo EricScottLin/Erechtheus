@@ -4,7 +4,7 @@ from nonebot import on_command
 from nonebot.adapters.onebot.v11 import Bot, GroupMessageEvent, Message, MessageSegment
 from nonebot.params import CommandArg
 
-from . import features
+from . import assets, features
 from .helpers import extract_target
 from .rules import explicit_prefix_or_at
 
@@ -29,8 +29,16 @@ async def handle_box(
     if target is None:
         await box_cmd.finish("用法：/盒 @用户（也可以回复某条消息后发 /盒）")
 
-    await box_cmd.finish(
+    msg = (
         MessageSegment.text("📦 开盒成功：")
         + MessageSegment.at(target)
         + MessageSegment.text(f" 的 QQ 是 {target}")
     )
+
+    collected = await assets.collect_assets(str(target))
+    if collected:
+        msg += MessageSegment.text("\n──── 资产 ────")
+        for source, lines in collected:
+            msg += MessageSegment.text(f"\n【{source}】\n" + "\n".join(lines))
+
+    await box_cmd.finish(msg)
