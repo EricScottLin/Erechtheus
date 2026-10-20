@@ -65,9 +65,6 @@ __plugin_meta__ = PluginMetadata(
 
 plugin_config = get_plugin_config(Config)
 
-# 捕鱼日上限最多放大到这里（随机倍率日可能给到 ×320，不封顶会让一天刷出 20 万荣耀）
-FISH_CAP_MULT_MAX = 320.0
-
 KLEOS = "kleos"
 DRACHMA = "drachma"
 FISHCOIN = "fishcoin"
@@ -310,11 +307,8 @@ async def handle_fish(event: MessageEvent) -> None:
         plugin_config.qqbot_economy_fish_kleos_cap_max,
     )
     mult_info = today_multiplier(uid)
-    cap_eff = (
-        None
-        if mult_info.get("uncap")
-        else int(cap * min(mult_info["mult"], FISH_CAP_MULT_MAX))
-    )
+    # 倍数只让"几条鱼就吃满"，不抬高天花板：日上限始终是 cap（100~680 随星级）
+    cap_eff = None if mult_info.get("uncap") else int(cap)
     kleos_gain = 0
     fish_kleos_used = 0
     if cap > 0 or cap_eff is None:
