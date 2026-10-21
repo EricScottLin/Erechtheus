@@ -95,19 +95,6 @@ HELP = """📚 梗图库（全局共享，仅超级用户可上传）
 （梗图全局生效，各群用 /开启 梗图 或 /关闭 梗图 控制）"""
 
 
-def _view_msg(trigger: str, files: list[str]) -> Message:
-    """把触发词下的图按序号列出，最多预览 8 张。"""
-    msg = Message(MessageSegment.text(f"📚「{trigger}」共 {len(files)} 张：\n"))
-    for i, name in enumerate(files, 1):
-        msg += MessageSegment.text(f"{i}. {name}\n")
-    for name in files[:8]:
-        path = library.image_path(name)
-        if path.is_file():
-            msg += MessageSegment.image(path.read_bytes())
-    msg += MessageSegment.text("\n删除某张：/梗 删除 " + trigger + " <序号>")
-    return msg
-
-
 @meme_cmd.handle()
 async def handle_meme(bot: Bot, event: MessageEvent, arg: Message = CommandArg()) -> None:
     sub, trigger, index = _parse(arg)
@@ -131,7 +118,21 @@ async def handle_meme(bot: Bot, event: MessageEvent, arg: Message = CommandArg()
         files = library.memes_for(trigger)
         if not files:
             await meme_cmd.finish(f"没有「{trigger}」这个触发词。")
-        await meme_cmd.finish(_view_msg(trigger, files))
+        total = len(files)
+        # 每张图单独一条消息、前面标序号，看中了直接 /梗 删除 <触发词> <序号>
+        await meme_cmd.send(
+            f"📚「{trigger}」共 {total} 张，下面是全部预览。"
+            f"\n要删哪张就发：/梗 删除 {trigger} <序号>"
+        )
+        for i, name in enumerate(files, 1):
+            path = library.image_path(name)
+            if not path.is_file():
+                await meme_cmd.send(f"第 {i} 张：文件丢失（{name}）")
+                continue
+            await meme_cmd.send(
+                Message(MessageSegment.text(f"第 {i} 张")) + MessageSegment.image(path.read_bytes())
+            )
+        await meme_cmd.finish("预览完啦～")
 
     if sub in ("添加", "上传", "add"):
         if not trigger:
