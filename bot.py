@@ -37,13 +37,18 @@ driver.register_adapter(OneBotAdapter)
 #    https://nonebot.dev/docs/tutorial/create-plugin
 nonebot.load_plugin(Path("plugins/qqbot_toolbox"))
 
-# 4. 本地插件 plugins/qqbot_group：群聊管理（禁言/踢人/全体禁言/撤回/复读）
+# 4. 群聊管理：禁言/踢人/全体禁言/撤回 + 按群功能开关
 nonebot.load_plugin(Path("plugins/qqbot_group"))
+
+# 复读与「我说你说」教学。
+# 会把 repeat/teach 注册进 qqbot_group 的按群功能开关，
+# 因此必须排在 qqbot_group 之后加载。
+nonebot.load_plugin(Path("plugins/qqbot_repeat"))
 
 # 吐槽插件：/骂（默认关闭，按群开关）
 nonebot.load_plugin(Path("plugins/qqbot_roast"))
 
-# 5. 本地插件 plugins/qqbot_meme：表情包管理（戳一戳随机回图 + 金句库）
+# 5. 表情包管理：戳一戳随机回图 + 金句库
 nonebot.load_plugin(Path("plugins/qqbot_meme"))
 # B站视频解析：GreaterLG70/nonebot-plugin-bilibili，vendored 进来是为了避开
 # PyPI 上同名的 mengbingnaixi「动态订阅」插件（同名不同物，pip 会装错）
@@ -68,9 +73,6 @@ nonebot.load_plugin("nonebot_plugin_nbnhhsh")
 # 小猪宇宙：在 rollpig 之上扩展（图鉴成就 → Kleos；后续 DX PASS/斗兽场/牧场）
 # 依赖 rollpig（读猪圈）与 economy（发 Kleos），必须排在两者之后加载
 nonebot.load_plugin(Path("plugins/qqbot_pigverse"))
-
-# 临时诊断：捕获 send_msg 调用栈（定位「参数...匹配失败」发送者）
-nonebot.load_plugin(Path("plugins/qqbot_diag_botcall"))
 
 # 5. 启动
 nonebot.run()

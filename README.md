@@ -28,12 +28,16 @@ LLBot 的 WebUI(3081) 与 OneBot WS(3001) 由配置文件强制绑定 `127.0.0.1
 | 插件 | 来源 | 功能 |
 |---|---|---|
 | `qqbot_toolbox` | 自研 | `/指令`（**按指令列出全部用法**，`/指令 <指令名>` 看详情）、`/ping`（探活 + 延迟 + 拥堵评价）、`/status`（收发消息数、已运行时长）、`/echo` |
-| `qqbot_economy` | 自研 | 每日签到领 Kleos 荣耀、捕鱼赚 Drachma 德拉克马、鱼竿/鱼饵/抽奖 |
-| `qqbot_group` | 自研 | **群聊管理**：`/烟` 随机禁言（8 小时内）、`/禁言`、`/解禁`、`/踢`、`/全体禁言`、`/解除全体`、`/撤`（撤回机器人上一条消息）、复读、**按群功能开关**（`/本群功能`、`/关闭 视频解析`）、`/盒`（查 QQ 号 + 跨插件资产） |
+| `qqbot_core` | 自研 | **基础服务**：月币/荣耀账户、`/余额`、`/名片`、`/称号`、`/升阶`、`/发红包`、`/抢红包`、`/签名`、`/改昵称`、`/配置`（其他插件通过 `require` 调用其货币接口） |
+| `qqbot_economy` | 自研 | 每日签到领荣耀、捕鱼赚月币、鱼竿/鱼饵/抽奖 |
+| `qqbot_group` | 自研 | **群聊管理**：`/烟` 随机禁言（8 小时内）、`/禁言`、`/解禁`、`/踢`、`/全体禁言`、`/解除全体`、`/撤`（撤回机器人上一条消息）、**按群功能开关**（`/本群功能`、`/关闭 视频解析`）、`/盒`（查 QQ 号 + 跨插件资产） |
+| `qqbot_repeat` | 自研 | **复读与我说你说**：连续 3 个不同用户发相同内容时跟发一次；`我说 X 你说 Y` 教学（Y 支持文字或表情包），`/我说列表`、`/我说删除` |
 | `qqbot_meme` | 自研 | **表情包管理**：戳一戳随机回表情包、`/表情` 管理、金句库（群精华自动收录） |
 | `qqbot_roast` | 自研 | **吐槽/电猪/梗图**：`/骂`、`/电`、`/梗`（私聊上传触发词→表情包）（默认关闭，按群开关） |
+| `qqbot_pigverse` | 自研 | **小猪宇宙**：图鉴成就 → 荣耀、吃什么/喝什么推荐、表情库总览拼图 |
 | `nonebot_plugin_bilibili` | vendored + 自研扩展（[GreaterLG70/nonebot-plugin-bilibili](https://github.com/GreaterLG70/nonebot-plugin-bilibili) 之上加了「发视频」） | 群里发B站链接 → 回 `y` 发压缩版视频；`/bilibili rank` 榜单；`/bilibili up` 查 UP 主 |
 | `nonebot_plugin_picmenu_next` | [lgc-NB2Dev/nonebot-plugin-picmenu-next](https://github.com/lgc-NB2Dev/nonebot-plugin-picmenu-next) | `/help`、`/帮助`、`/菜单` 图片帮助菜单（插件列表/详情/模糊搜索） |
+| `nonebot_plugin_rollpig_plus` | [Felis2026/nonebot-plugin-rollpig-plus](https://github.com/Felis2026/nonebot-plugin-rollpig-plus) | 今日小猪：每日抽猪、猪圈收藏、烤群友 |
 | `nonebot_plugin_nbnhhsh` | [ByteColtX/nonebot-plugin-nbnhhsh](https://github.com/ByteColtX/nonebot-plugin-nbnhhsh) | 「能不能好好说话」拼音缩写翻译：`/nbnhhsh yyds`、`/好好说话 yyds`、「yyds是啥」；默认出图 |
 | `nonebot_plugin_maimaidx` | [Yuri-YuzuChaN/nonebot-plugin-maimaidx](https://github.com/Yuri-YuzuChaN/nonebot-plugin-maimaidx) | 舞萌 DX 查分器 |
 
@@ -130,7 +134,9 @@ docker compose logs -f nonebot
 │   └── verify-plugins.py      # 宿主机 venv 验证插件加载
 ├── docs/
 │   ├── CURRENCY_SPEC.md       # 货币系统规范（双代币、防通胀、新增检查清单）
-│   └── QQBOT_DEPLOYMENT_STATUS.md  # 部署状态与待办
+│   ├── FEATURES_2026-10-20.md # 功能更新记录（群管/表情/金句/按群开关）
+│   ├── EVENTS.md              # 事件与埋点
+│   └── FESTIVALS.md           # 节日/节气数据
 └── legacy/
     └── hoshino-user-changes/  # HoshinoBot fork 中个人改动的存档
 ```
@@ -170,7 +176,8 @@ docker compose logs -f nonebot
 
 - [功能更新记录（2026-10）](docs/FEATURES_2026-10-20.md) —— 群聊管理/表情包/金句/群精华/按群开关
 - [货币系统规范](docs/CURRENCY_SPEC.md) —— 双代币设计、防通胀指标、新增代币检查清单
-- [部署状态与待办](docs/QQBOT_DEPLOYMENT_STATUS.md)
+- [事件与埋点](docs/EVENTS.md)
+- [节日与节气数据](docs/FESTIVALS.md)
 - [NoneBot 官方文档](https://nonebot.dev/)
 
 ## 分支说明
