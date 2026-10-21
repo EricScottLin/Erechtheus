@@ -59,7 +59,18 @@ from .api import (
 __plugin_meta__ = PluginMetadata(
     name="B站助手",
     description="B站链接解析、压缩视频发群、排行榜、UP主查询",
-    usage="群里发B站链接→回 y 发视频；/bilibili rank 看榜单；/bilibili up 影视飓风 查UP主",
+    # 本地修改：原上游 usage 是一整行散文（"群里发B站链接→回 y 发视频；..."），
+    # 无法被菜单逐条列出，这里改成规整的「指令 + 说明」行，便于 /指令 菜单解析。
+    usage="""\
+（群里 @我 并发B站链接即可解析视频，私聊直接发链接）
+/bilibili             查看帮助
+/bilibili rank        全站榜 TOP10
+/bilibili rank 动画 5  指定分区与条数
+/bilibili up <UID或昵称>  查询 UP 主数据
+/bilibili <链接或BV号>    解析该视频""",
+    type="application",
+    homepage="https://github.com/GreaterLG70/nonebot-plugin-bilibili",
+    supported_adapters={"~onebot.v11"},
 )
 
 _CQ_CODE = re.compile(r"\[CQ:[^\]]*\]")
