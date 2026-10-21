@@ -111,6 +111,7 @@ async def handle_meme(bot: Bot, event: MessageEvent, arg: Message = CommandArg()
         urls = _images_of(event)
         if not urls:
             await meme_cmd.finish("没找到图片：请带上图片，或回复一条带图片的消息再发这条命令。")
+        saved: list[bytes] = []
         added, dup = 0, 0
         for url in urls:
             data = await _fetch(bot, url)
@@ -119,14 +120,20 @@ async def handle_meme(bot: Bot, event: MessageEvent, arg: Message = CommandArg()
             _, is_new = await library.add_meme(trigger, data)
             added += int(is_new)
             dup += int(not is_new)
-        if not added and not dup:
+            saved.append(data)
+        if not saved:
             await meme_cmd.finish("图片下载失败，没有保存。")
         total = len(library.memes_for(trigger))
-        await meme_cmd.finish(
+        summary = (
             f"✅「{trigger}」新增 {added} 张"
             + (f"，重复 {dup} 张已跳过" if dup else "")
             + f"，现在共 {total} 张。"
         )
+        # 引用上传成功的那张图回复，方便确认存的是哪张
+        msg = Message(MessageSegment.text(summary))
+        for data in saved[:4]:
+            msg += MessageSegment.image(data)
+        await meme_cmd.finish(msg)
 
     if sub in ("删除", "清空", "del"):
         if not trigger:
