@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import time
 from pathlib import Path
@@ -40,6 +41,11 @@ def sniff_ext(data: bytes) -> str | None:
     if len(data) > 12 and data[:4] == b"RIFF" and data[8:12] == b"WEBP":
         return ".webp"
     return None
+
+
+def sha256_bytes(data: bytes) -> str:
+    """内容哈希：用于重复投稿检测。"""
+    return hashlib.sha256(data).hexdigest()
 
 
 def _load() -> list[dict[str, Any]]:
@@ -96,16 +102,36 @@ async def add_meme(
     source: str = "user",
     title: str = "",
     uploader: str = "",
-) -> dict[str, Any] | None:
-    """保存一张表情包并写入索引；格式不识别或超限返回 None。"""
+) -> dict[str, Any]:
+    """保存一张表情包并写入索引。
+
+    返回 {ok: True, item} / {ok: False, reason: "duplicate", existing} /
+    {ok: False, reason: "format"}。
+    """
     if len(data) > MAX_UPLOAD_BYTES:
-        return None
+        return {"ok": False, "reason": "format"}
     ext = sniff_ext(data)
     if ext is None:
-        return None
+        return {"ok": False, "reason": "format"}
+    digest = sha256_bytes(data)
 
     async with _lock:
         items = _load()
+        dirty = False
+        for m in items:
+            if not m.get("hash"):
+                path = MEMES_DIR / str(m.get("file") or "")
+                if path.is_file():
+                    m["hash"] = sha256_bytes(path.read_bytes())
+                    dirty = True
+            if m.get("hash") == digest:
+                if dirty:
+                    await _save()
+                logger.info(f"[pigverse] 重复表情包，已存在 #{m.get('id')}")
+                return {"ok": False, "reason": "duplicate", "existing": dict(m)}
+        if dirty:
+            await _save()
+
         next_id = max((int(m.get("id", 0)) for m in items), default=0) + 1
         fname = f"{next_id:04d}{ext}"
         MEMES_DIR.mkdir(parents=True, exist_ok=True)
@@ -117,11 +143,12 @@ async def add_meme(
             "title": title[:60],
             "uploader": uploader,
             "ts": int(time.time()),
+            "hash": digest,
         }
         items.append(item)
         await _save()
         logger.info(f"[pigverse] 新增表情包 #{next_id} source={source}")
-        return dict(item)
+        return {"ok": True, "item": dict(item)}
 
 
 async def delete_meme(meme_id: int) -> bool:
@@ -141,3 +168,21 @@ async def delete_meme(meme_id: int) -> bool:
 async def list_memes(limit: int = 8) -> list[dict[str, Any]]:
     async with _lock:
         return [dict(m) for m in _load()][:limit]
+
+
+async def all_memes() -> list[dict[str, Any]]:
+    """全部表情包（按 id 升序），供总览拼图使用。"""
+    async with _lock:
+        return sorted((dict(m) for m in _load()), key=lambda m: int(m.get("id", 0)))
+
+
+async def get_meme(meme_id: int) -> dict[str, Any] | None:
+    async with _lock:
+        for m in _load():
+            if int(m.get("id", -1)) == int(meme_id):
+                return dict(m)
+    return None
+
+
+def meme_path(item: dict[str, Any]) -> Path:
+    return MEMES_DIR / str(item.get("file") or "")

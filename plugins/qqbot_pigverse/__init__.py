@@ -1,15 +1,19 @@
 """小猪宇宙（Pigverse）—— rollpig-plus 之上的扩展功能集。
 
 Phase 1：/猪猪成就    图鉴里程碑 → 一次性 Kleos（封闭卡池，总量 11,150）
-Phase 2：/小猪卡      今日小猪渲染成 DXPASS 风格卡片（规划中）
-Phase 3：/斗猪        群友斗猪（规划中）
-Phase 4：/牧场 /喂食  小猪养成 + Drachma sink（规划中）
-互动：  「小猪小猪」关键词 → 猪叫 + 随机表情包；/猪猪表情 查看/投稿
+Phase 2：/小猪卡      今日小猪渲染成 DXPASS 风格卡片
+Phase 3：/斗猪        群友斗猪（每日 3 次）
+Phase 4：/牧场 /喂食  小猪养成 + Drachma sink
+互动：  「小猪小猪」关键词 → 猪叫 + 随机表情包；/猪猪表情 查看/投稿/总览
+附加：  /吃什么       随机推荐一道菜（下厨房菜谱图）
 
 设计规范见 docs/PIGVERSE_SPEC.md；经济规则见 docs/CURRENCY_SPEC.md。
 """
 
+import asyncio
+import math
 import random
+import re
 import time
 
 from nonebot import on_command, on_message, on_regex
@@ -18,8 +22,9 @@ from nonebot.log import logger
 from nonebot.params import CommandArg
 from nonebot.plugin import PluginMetadata
 
-from . import memes
+from . import dishes, memes
 from .achievements import ACHIEVEMENTS, TOTAL_KLEOS, check_and_claim, progress_view
+from .sheet import render_meme_sheet
 from .store import get_user
 
 __plugin_meta__ = PluginMetadata(
@@ -88,10 +93,12 @@ def _image_url_from_event(event: MessageEvent) -> str:
     return ""
 
 
-async def _image_url_from_reply(bot: Bot, event: MessageEvent) -> tuple[str, str]:
+async def _image_url_from_reply(
+    bot: Bot, event: MessageEvent
+) -> tuple[str, str, int | None]:
     """引用回复：图片在 reply 指向的那条消息里，需要 get_msg 取回。
 
-    返回 (url, reason)：url 为空时 reason 说明原因（供提示用户）。
+    返回 (url, reason, message_id)：message_id 是图片所在消息的 id（用于成功时引用）。
     """
     for seg in event.get_message():
         if seg.type != "reply":
@@ -103,24 +110,31 @@ async def _image_url_from_reply(bot: Bot, event: MessageEvent) -> tuple[str, str
             msg = await bot.get_msg(message_id=int(raw_id))
         except Exception as e:
             logger.warning(f"[pigverse] get_msg({raw_id}) 失败: {e}")
-            return "", "取不到你引用的那条消息（可能太旧），请重新发一张图再上传"
+            return "", "取不到你引用的那条消息（可能太旧），请重新发一张图再上传", None
         if not isinstance(msg, dict):
-            return "", "引用消息格式异常，请重新发一张图再上传"
+            return "", "引用消息格式异常，请重新发一张图再上传", None
         segments = [it for it in (msg.get("message") or []) if isinstance(it, dict)]
         for item in segments:
             if item.get("type") in ("image", "mface"):
                 url = str((item.get("data") or {}).get("url") or "")
                 if url.startswith("http"):
-                    return url, ""
+                    return url, "", int(raw_id)
         types = [it.get("type") for it in segments]
         logger.info(f"[pigverse] 引用消息 {raw_id} 无图片段，类型={types}")
-        return "", f"你引用的消息里没有图片（内容类型：{', '.join(types) or '空'}），请引用一张图片或表情包"
-    return "", ""
+        return (
+            "",
+            f"你引用的消息里没有图片（内容类型：{', '.join(types) or '空'}），请引用一张图片或表情包",
+            None,
+        )
+    return "", "", None
 
 
 # 最近图片缓存：发图后 10 分钟内可免引用上传（引用操作在部分客户端不生效的兜底）
 IMAGE_CACHE_TTL = 600
-_last_image: dict[str, tuple[str, float]] = {}
+# 群级兜底：图是别人发的、或换号发指令时，用本群最近一张图（更短的有效期）
+GROUP_IMAGE_TTL = 180
+_last_image: dict[str, tuple[str, float, int]] = {}
+_last_group_image: dict[str, tuple[str, float, int]] = {}
 
 image_watcher = on_message(priority=100, block=False)
 
@@ -128,8 +142,14 @@ image_watcher = on_message(priority=100, block=False)
 @image_watcher.handle()
 async def _watch_image(event: MessageEvent) -> None:
     url = _image_url_from_event(event)
-    if url:
-        _last_image[str(event.get_user_id())] = (url, time.time())
+    if not url:
+        return
+    uid = str(event.get_user_id())
+    stamp = (url, time.time(), int(event.message_id))
+    _last_image[uid] = stamp
+    gid = getattr(event, "group_id", None)
+    if gid is not None:
+        _last_group_image[str(gid)] = stamp
 
 
 @memes_cmd.handle()
@@ -139,20 +159,28 @@ async def handle_memes(bot: Bot, event: MessageEvent, arg: Message = CommandArg(
     if sub in ("上传", "投稿", "添加"):
         url = _image_url_from_event(event)
         reason = ""
+        image_msg_id: int | None = int(event.message_id) if url else None
         if not url:
-            url, reason = await _image_url_from_reply(bot, event)
+            url, reason, image_msg_id = await _image_url_from_reply(bot, event)
         if not url:
             # 免引用兜底：取该用户最近 10 分钟内发过的图
             cached = _last_image.get(str(event.get_user_id()))
             if cached and time.time() - cached[1] < IMAGE_CACHE_TTL:
-                url = cached[0]
+                url, image_msg_id = cached[0], cached[2]
+        if not url:
+            # 群级兜底：图可能是别人发的（或换了号发指令），用本群最近一张图
+            gid = str(getattr(event, "group_id", "") or "")
+            group_cached = _last_group_image.get(gid) if gid else None
+            if group_cached and time.time() - group_cached[1] < GROUP_IMAGE_TTL:
+                url, image_msg_id = group_cached[0], group_cached[2]
+                logger.info(f"[pigverse] 使用本群最近图片兜底: group={gid}")
         if not url:
             if reason:
                 await memes_cmd.finish(reason)
             await memes_cmd.finish(
                 "上传方式（任选其一）：\n"
                 "① 发一张图，然后 10 分钟内发 /猪猪表情 上传\n"
-                "② 引用回复一张图（新旧都行），再发 /猪猪表情 上传"
+                "② 引用回复一张图（新旧都行、别人发的也行），再发 /猪猪表情 上传"
             )
         import httpx
 
@@ -165,15 +193,56 @@ async def handle_memes(bot: Bot, event: MessageEvent, arg: Message = CommandArg(
         except Exception as e:
             logger.warning(f"[pigverse] 表情包下载异常: {e}")
             await memes_cmd.finish("图片下载失败，稍后再试")
-        item = await memes.add_meme(
+        result = await memes.add_meme(
             resp.content, uploader=str(event.get_user_id())
         )
-        if item is None:
+        quote = MessageSegment.reply(image_msg_id or event.message_id)
+        if not result.get("ok"):
+            if result.get("reason") == "duplicate":
+                existing = result.get("existing") or {}
+                text = quote + (
+                    f"这张已经收录过了（第 {existing.get('id', '?')} 张），换一张吧"
+                )
+                path = memes.meme_path(existing) if existing else None
+                if (
+                    path is not None
+                    and path.is_file()
+                    and path.stat().st_size <= memes.MAX_SEND_BYTES
+                ):
+                    await memes_cmd.finish(text + MessageSegment.image(path.read_bytes()))
+                await memes_cmd.finish(text)
             await memes_cmd.finish("只支持 jpg/png/gif/webp，且不超过 2MB 哦")
+        item = result["item"]
         await memes_cmd.finish(
-            MessageSegment.reply(event.message_id)
-            + f"收到！入库成功，这是第 {item['id']} 张猪猪表情包 🐷"
+            quote + f"收到！入库成功，这是第 {item['id']} 张猪猪表情包 🐷"
         )
+
+    if sub in ("列表", "全部", "总览", "所有") or sub.startswith("列表"):
+        page = 1
+        matched = re.search(r"(\d+)", sub)
+        if matched:
+            page = max(1, int(matched.group(1)))
+        total = await memes.count()
+        items_all = await memes.all_memes()
+        if not items_all:
+            await memes_cmd.finish("表情库还是空的，发张图来投稿吧")
+        page_size = 36
+        pages = max(1, math.ceil(len(items_all) / page_size))
+        page = min(page, pages)
+        chunk = items_all[(page - 1) * page_size : page * page_size]
+        png = await asyncio.to_thread(
+            render_meme_sheet, chunk, total=total, page=page, pages=pages
+        )
+        await memes_cmd.finish(MessageSegment.image(png))
+
+    if sub.isdigit():
+        item = await memes.get_meme(int(sub))
+        if item is None:
+            await memes_cmd.finish(f"没有第 {sub} 张，发 /猪猪表情 列表 看看有哪些")
+        path = memes.meme_path(item)
+        if not path.is_file():
+            await memes_cmd.finish("这张的图片文件丢了…")
+        await memes_cmd.finish(MessageSegment.image(path.read_bytes()))
 
     total = await memes.count()
     meme = await memes.random_meme()
@@ -183,7 +252,9 @@ async def handle_memes(bot: Bot, event: MessageEvent, arg: Message = CommandArg(
             + MessageSegment.image(meme.read_bytes())
         )
     await memes_cmd.finish(
-        f"🐷 当前有 {total} 张猪猪表情包\n投稿：发图后回复 /猪猪表情 上传"
+        f"🐷 当前有 {total} 张猪猪表情包\n"
+        "投稿：发图后回复 /猪猪表情 上传\n"
+        "总览：/猪猪表情 列表（可加页码）"
     )
 
 
@@ -462,4 +533,119 @@ async def handle_pigpig_cmd(event: MessageEvent) -> None:
             if resolution.was_auto_created
             else None
         ),
+    )
+
+
+# ---------------------------------------------------------------- /吃什么 /喝什么
+eat_cmd = on_command(
+    "吃什么",
+    aliases={"吃啥", "今天吃什么", "午饭吃什么", "晚饭吃什么", "早饭吃什么", "夜宵吃什么"},
+    priority=5,
+    block=True,
+)
+drink_cmd = on_command(
+    "喝什么",
+    aliases={"喝啥", "今天喝什么", "喝点什么", "饮品"},
+    priority=5,
+    block=True,
+)
+
+EAT_LEADS = ("就它了！", "别纠结了，", "今天翻牌子：", "天意如此，", "听我的，")
+DRINK_LEADS = ("来一杯", "解渴就选", "今天喝点", "推荐", "就喝")
+
+MENU_WORDS = ("列表", "分类", "都有啥", "菜单", "有什么", "有啥")
+
+
+def _eat_menu() -> str:
+    cuisines = dishes.cuisines()
+    chain_stats = dishes.chains()
+    lines = [f"🍽 菜谱共 {dishes.count()} 道（{len(cuisines)} 个菜系）"]
+    for cuisine, n in cuisines.items():
+        lines.append(f"  {cuisine} {n} 道")
+    if chain_stats:
+        lines.append(f"🏪 连锁店 {len(chain_stats)} 家：")
+        for store, n in chain_stats.items():
+            lines.append(f"  {store} {n} 项")
+    lines.append("用法：/吃什么 [菜系|店家] 例：/吃什么 川菜、/吃什么 麦当劳")
+    return "\n".join(lines)
+
+
+def _drink_menu() -> str:
+    stats = dishes.drink_categories()
+    lines = [f"🥤 饮品共 {sum(stats.values())} 种："]
+    for cat, n in stats.items():
+        lines.append(f"  {cat} {n} 种")
+    lines.append("用法：/喝什么 [分类|品牌] 例：/喝什么 奶茶、/喝什么 瑞幸咖啡")
+    return "\n".join(lines)
+
+
+@eat_cmd.handle()
+async def handle_eat(event: MessageEvent, arg: Message = CommandArg()) -> None:
+    sub = arg.extract_plain_text().strip()
+
+    if not sub:
+        dish = dishes.random_dish()
+        if dish is None or dish.get("path") is None:
+            await eat_cmd.finish("菜谱还没准备好，稍后再试")
+        text = (
+            f"🍽 {random.choice(EAT_LEADS)}今天吃「{dish['name']}」吧！\n"
+            f"{dish['cuisine']} · 再发一次换一道"
+        )
+        await eat_cmd.finish(
+            MessageSegment.text(text) + MessageSegment.image(dish["path"].read_bytes())
+        )
+
+    if sub in MENU_WORDS:
+        await eat_cmd.finish(_eat_menu())
+
+    target = dishes.find_target(sub)
+    if target is None:
+        await eat_cmd.finish(f"没找到「{sub}」，可以试试：\n{_eat_menu()}")
+
+    kind, name = target
+    if kind == "store":
+        pick = dishes.random_store_item(name)
+        if pick is None:
+            await eat_cmd.finish(f"「{name}」的菜单还没收录")
+        await eat_cmd.finish(
+            f"🏪 {random.choice(EAT_LEADS)}{name}的「{pick['name']}」！\n再发一次换一道"
+        )
+
+    if kind == "drink":
+        await eat_cmd.finish(f"「{name}」是喝的，试试 /喝什么 {name}")
+
+    dish = dishes.random_dish(name)
+    if dish is None or dish.get("path") is None:
+        await eat_cmd.finish(f"「{name}」暂时没有图，换一道吧")
+    text = (
+        f"🍽 {random.choice(EAT_LEADS)}今天吃「{dish['name']}」吧！\n"
+        f"{dish['cuisine']} · 再发一次换一道"
+    )
+    await eat_cmd.finish(
+        MessageSegment.text(text) + MessageSegment.image(dish["path"].read_bytes())
+    )
+
+
+@drink_cmd.handle()
+async def handle_drink(event: MessageEvent, arg: Message = CommandArg()) -> None:
+    sub = arg.extract_plain_text().strip()
+
+    if sub in MENU_WORDS:
+        await drink_cmd.finish(_drink_menu())
+
+    if sub:
+        target = dishes.find_target(sub)
+        if target is None:
+            await drink_cmd.finish(f"没找到「{sub}」，可以试试：\n{_drink_menu()}")
+        kind, name = target
+        if kind == "store":
+            await drink_cmd.finish(f"「{name}」是吃饭的地方，试试 /吃什么 {name}")
+        if kind == "cuisine":
+            await drink_cmd.finish(f"「{name}」是菜系，试试 /吃什么 {name}")
+
+    pick = dishes.random_drink(sub)
+    if pick is None:
+        await drink_cmd.finish("饮品库还没准备好，稍后再试")
+    await drink_cmd.finish(
+        f"🥤 {random.choice(DRINK_LEADS)}「{pick['name']}」吧！\n{pick['category']} · 再发一次换一杯"
     )
