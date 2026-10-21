@@ -234,15 +234,21 @@ feature_cmd = on_command(
 
 @feature_cmd.handle()
 async def handle_features(bot: Bot, event: GroupMessageEvent) -> None:
-    """列出本群所有功能开关。"""
-    denial = check_sender_admin(bot, event)
-    if denial:
-        await finish_denial(feature_cmd, bot, event, denial)
+    """列出本群所有功能开关（所有人可看，只有管理员能改）。"""
+    features = list_features(event.group_id)
+    on = [name for _, name, enabled in features if enabled]
+    off = [name for _, name, enabled in features if not enabled]
 
-    lines = [f"⚙️ 本群功能开关（{event.group_id}）"]
-    for _, name, enabled in list_features(event.group_id):
+    lines = [f"⚙️ 本群功能开关（{event.group_id}）", "────────────"]
+    for _, name, enabled in features:
         lines.append(f"{'✅' if enabled else '❌'} {name}")
-    lines.append("开关：@我 关闭本群复读 / /关闭 复读")
+    lines.append("────────────")
+    lines.append(f"已开 {len(on)} / 共 {len(features)} 项")
+
+    if check_sender_admin(bot, event) is None:
+        lines.append("开关：/开启 <功能>、/关闭 <功能>（也可以说「关闭本群视频解析」）")
+    else:
+        lines.append("你是普通成员，只能查看；开关需要群主/群管操作。")
     await feature_cmd.finish("\n".join(lines))
 
 
