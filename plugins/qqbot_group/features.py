@@ -152,7 +152,7 @@ register_feature("box", "盒（查QQ/资产）", default=False, aliases=("开盒
 register_feature(
     "selfmute", "禁言套餐/精致睡眠",
     default=False,
-    aliases=("精致睡眠", "禁言套餐", "睡眠", "下午茶", "午睡", "牢饭", "自闭"),
+    aliases=("精致睡眠", "禁言套餐", "睡眠", "下午茶", "午睡", "牢饭", "自闭", "极致睡眠", "冬眠"),
 )
 register_feature(
     "greeting", "早安/晚安",

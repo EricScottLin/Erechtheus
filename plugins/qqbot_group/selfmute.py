@@ -5,6 +5,7 @@
 - 精致睡眠（6~12h）、精致午睡（30~90min）、精致下午茶（1~3h）、精致晚餐（1~2h）
 - 禁言套餐（1~60min）：牢饭、小黑屋、面壁、坐牢、闭麦、自闭……
 - 豪华/至尊/皇帝套餐（2~6h）
+- 极致睡眠 / 深度睡眠 / 冬眠（24~72h，来真的）
 
 不指定对象时只禁言发言者自己；只有群主/群管可以 @ / 回复 / QQ 号指定别人。
 """
@@ -68,6 +69,13 @@ PRESETS: tuple[MutePreset, ...] = (
     MutePreset(
         "luxury", "豪华禁言套餐", "💎", 2 * 3600, 6 * 3600,
         ("豪华禁言套餐", "至尊禁言套餐", "皇帝套餐", "豪华套餐"),
+    ),
+    MutePreset(
+        "ultimate", "极致睡眠", "🛌", 24 * 3600, 72 * 3600,
+        (
+            "极致睡眠", "极致睡眠套餐", "深度睡眠", "深度睡眠套餐",
+            "冬眠", "来个大的", "来点大的", "整个大的",
+        ),
     ),
 )
 
@@ -135,6 +143,12 @@ def _duration_seconds(preset: MutePreset) -> int:
         hi = max(plugin_config.qqbot_group_sleep_min_hours,
                  plugin_config.qqbot_group_sleep_max_hours)
         return random.randint(lo, hi) * 3600
+    if preset.key == "ultimate":
+        lo = min(plugin_config.qqbot_group_ultimate_min_hours,
+                 plugin_config.qqbot_group_ultimate_max_hours)
+        hi = max(plugin_config.qqbot_group_ultimate_min_hours,
+                 plugin_config.qqbot_group_ultimate_max_hours)
+        return random.randint(lo, hi) * 3600
     if preset.key == "package":
         lo = min(plugin_config.qqbot_group_package_min_minutes,
                  plugin_config.qqbot_group_package_max_minutes)
@@ -180,11 +194,15 @@ async def handle_selfmute(bot: Bot, event: GroupMessageEvent) -> None:
     except Exception as e:  # noqa: BLE001
         await selfmute.finish(f"禁言请求发送失败：{type(e).__name__}: {e}")
 
+    extra = ""
+    if preset.key == "ultimate":
+        extra = "（这可是来真的 🫠）" if target == sender_id else "（下手真狠 🫠）"
+
     if target == sender_id:
         await selfmute.finish(
-            f"{preset.emoji} {preset.name}已生效：{format_duration(duration)} 后见～"
+            f"{preset.emoji} {preset.name}已生效：{format_duration(duration)} 后见～{extra}"
         )
     await selfmute.finish(
         f"{preset.emoji} 已给 {MessageSegment.at(target)} 安排{preset.name}"
-        f"：{format_duration(duration)}"
+        f"：{format_duration(duration)}{extra}"
     )

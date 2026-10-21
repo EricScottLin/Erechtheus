@@ -72,6 +72,12 @@ class Config(BaseModel):
     qqbot_group_package_max_minutes: int = Field(
         default=60, ge=1, le=1440, description="禁言套餐最大时长（分钟）",
     )
+    qqbot_group_ultimate_min_hours: int = Field(
+        default=24, ge=1, le=720, description="极致睡眠最小时长（小时）",
+    )
+    qqbot_group_ultimate_max_hours: int = Field(
+        default=72, ge=1, le=720, description="极致睡眠最大时长（小时）",
+    )
 
     # ---- 早安/晚安 ----
     qqbot_group_greeting_reward_enabled: bool = Field(
@@ -105,6 +111,8 @@ class Config(BaseModel):
             )
         if self.qqbot_group_sleep_min_hours > self.qqbot_group_sleep_max_hours:
             raise ValueError("qqbot_group_sleep_min_hours 不能大于 sleep_max_hours")
+        if self.qqbot_group_ultimate_min_hours > self.qqbot_group_ultimate_max_hours:
+            raise ValueError("qqbot_group_ultimate_min_hours 不能大于 ultimate_max_hours")
         if self.qqbot_group_package_min_minutes > self.qqbot_group_package_max_minutes:
             raise ValueError(
                 "qqbot_group_package_min_minutes 不能大于 package_max_minutes"
