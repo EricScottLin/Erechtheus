@@ -96,12 +96,18 @@ def _normalize(text: str) -> str:
     return t.strip("~～!！。.，,")
 
 
-# 只认「整句就是套餐」或「给我来份 XX」这类明确句式；
+# 只认「整句就是套餐」或「给 XXX 来个 XX」「@某人 来份 XX」这类明确句式；
 # 句子中间顺带提到「坐牢」「自闭」不会触发（避免误判）。
+# 对象位置可以是 @某人、QQ 号或名字，后面跟「来个/来一份/安排/吃」等动词。
 _PREFIX_RE = r"(?:(?:给我来份|给我|来份|来一个|要一份|整一份|安排|请给我|给|帮|个))*"
+_TARGET_SEG = r"(?:[^，。,.!！?？\s]{0,16}?)(?=(?:来个|来点|来份|来一个|来一份|整一个|整份|安排|吃个|送上|上))"
+_VERB_SEG = r"(?:来个|来点|来份|来一个|来一份|整一个|整份|安排|吃个|送上|上|的)*"
 _SUFFIX_RE = r"(?:套餐)?(?:吧|啦|了|咯|喽|谢谢)*"
 _KW_ALTERNATION = "|".join(re.escape(k) for k, _ in _KEYWORD_MAP)
-_SELF_MUTE_RE = re.compile(rf"^{_PREFIX_RE}(?:{_KW_ALTERNATION}){_SUFFIX_RE}$")
+_TARGET_TEXT_RE = re.compile(rf"^{_PREFIX_RE}({_TARGET_SEG})(?:{_VERB_SEG})")
+_SELF_MUTE_RE = re.compile(
+    rf"^{_PREFIX_RE}(?:{_TARGET_SEG}{_VERB_SEG})*(?:{_KW_ALTERNATION}){_SUFFIX_RE}$"
+)
 
 
 def match_preset(text: str) -> MutePreset | None:
@@ -124,15 +130,46 @@ async def _keyword_rule(event: GroupMessageEvent) -> bool:
 selfmute = on_message(rule=_keyword_rule, priority=6, block=True)
 
 
-def _resolve_target(event: GroupMessageEvent, bot: Bot) -> int | None:
-    """@ / 回复 优先；其次允许消息里直接写 QQ 号。"""
+async def _find_member_by_name(bot: Bot, group_id: int, name: str) -> int | None:
+    """按群名片/昵称精确查找群成员。"""
+    name = name.strip()
+    if not name:
+        return None
+    try:
+        members = await bot.call_api("get_group_member_list", group_id=group_id)
+    except Exception:  # noqa: BLE001 —— 拿不到成员列表就放弃
+        return None
+    if not isinstance(members, list):
+        return None
+    for member in members:
+        if not isinstance(member, dict):
+            continue
+        card = str(member.get("card") or "").strip()
+        nick = str(member.get("nickname") or "").strip()
+        if name in (card, nick):
+            try:
+                return int(member.get("user_id"))
+            except (TypeError, ValueError):
+                continue
+    return None
+
+
+async def _resolve_target(event: GroupMessageEvent, bot: Bot) -> int | None:
+    """@ / 回复 优先；其次 QQ 号；再其次群名片/昵称。"""
     target = extract_target(event, Message(), bot.self_id)
     if target is not None:
         return target
-    for token in event.get_plaintext().replace("，", " ").split():
+    text = event.get_plaintext()
+    for token in text.replace("，", " ").split():
         token = token.strip()
         if token.isdigit() and 5 <= len(token) <= 12:
             return int(token)
+
+    # 「给张三来个极致睡眠」里的张三
+    match = _TARGET_TEXT_RE.match(_normalize(text))
+    if match:
+        name = match.group(1)
+        return await _find_member_by_name(bot, event.group_id, name)
     return None
 
 
@@ -165,7 +202,7 @@ async def handle_selfmute(bot: Bot, event: GroupMessageEvent) -> None:
         return
 
     sender_id = int(event.get_user_id())
-    target = _resolve_target(event, bot)
+    target = await _resolve_target(event, bot)
 
     # 指定别人：只有群主/群管可以
     if target is not None and target != sender_id:
