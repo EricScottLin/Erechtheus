@@ -51,6 +51,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.nonebot
+    # 用唯一 tag，避免多项目共享 qqbot-nonebot:latest 时被别的构建覆盖
+    image: ${COMPOSE_PROJECT_NAME:-qqbot}-nonebot:${IMAGE_TAG:-latest}
     container_name: ${COMPOSE_PROJECT_NAME:-qqbot}-nonebot
     network_mode: host
     restart: unless-stopped

@@ -70,7 +70,11 @@ COPY plugins/ ./plugins/
 # 入口
 COPY bot.py ./
 COPY .env.prod ./
+# 启动前依赖自检：补装镜像外依赖（nbnhhsh / platformdirs），幂等
+COPY docker-entrypoint.sh ./
+RUN chmod +x /app/docker-entrypoint.sh
 
 EXPOSE 8080
 
+ENTRYPOINT ["/app/docker-entrypoint.sh"]
 CMD ["python", "bot.py"]
