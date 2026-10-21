@@ -94,8 +94,8 @@ LLBot 的 WebUI(3081) 与 OneBot WS(3001) 由配置文件强制绑定 `127.0.0.1
 | `BILI_VIDEO_AUTO` | 1 | 群里不用@也响应（0=必须@） |
 | `BILI_VIDEO_GROUPS` | 空 | 只在这些群自动响应（逗号分隔） |
 | `BILI_VIDEO_CONFIRM` | 1 | 先回卡、等 y 确认（0=直接发） |
-| `BILI_VIDEO_MAX_DURATION` | 600 | 超过这个秒数不发 |
-| `BILI_VIDEO_MAX_MB` | 20 | 压缩后体积上限 |
+| `BILI_VIDEO_MAX_DURATION` | 1800 | 超过这个秒数不发（30 分钟） |
+| `BILI_VIDEO_MAX_MB` | 20 | 480P 体积上限；长视频按最低码率自动放宽 |
 | `BILI_VIDEO_HEIGHT` | 480 | 压缩后最大高度 |
 | `BILI_VIDEO_CRF` | 30 | 压缩质量 |
 | `BILI_VIDEO_QN` | 64 | 下载源画质（64=720P） |
@@ -173,6 +173,11 @@ docker compose logs -f nonebot
 | maimaidx 报 `unable to open database file` | 插件把可变状态放 `static/data`，而 `/static` 挂成了 `ro` | 挂载必须 `:rw` |
 | `SettingsError: error parsing env var "superusers"` | compose 的 `environment` 传了空串 `SUPERUSERS`，NoneBot 按 JSON 解析失败 | 不用时整行注释掉 |
 | `docker compose up -d` 显示 Running 但没生效 | 未检测到变更 | `docker compose restart nonebot` |
+
+## 备份
+
+服务器每 6 小时自动备份数据与密钥，详见 [docs/OPS_BACKUP.md](docs/OPS_BACKUP.md)。
+手动备份：`cd /srv/qqbot && ./backup.sh`。
 
 ## 文档
 
