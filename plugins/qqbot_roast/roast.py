@@ -116,7 +116,7 @@ roast_cmd = on_command(
 async def handle_roast(
     bot: Bot, event: GroupMessageEvent, arg: Message = CommandArg()
 ) -> None:
-    if not is_enabled(event.group_id):
+    if not is_enabled(event.group_id, "roast"):
         await roast_cmd.finish("本群的「骂」功能没开，管理员可以让我开。")
 
     target = _extract_target(event, bot)
