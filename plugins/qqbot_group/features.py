@@ -9,11 +9,12 @@
 
 内置功能：
 
-- ``repeat``      复读（qqbot_group.repeat 读取）
 - ``poke``        戳一戳表情（qqbot_meme 读取）
 - ``quotes``      金句（qqbot_meme 读取）
 - ``meme``        表情包 /表情（qqbot_meme 读取）
 - ``bili_video``  视频解析（桥接 nonebot_plugin_bilibili 的群开关）
+
+``repeat``（复读）与 ``teach``（我说你说）由独立插件 ``qqbot_repeat`` 注册。
 
 其他插件可以调用 ``register_feature(key, name, ...)`` 注册自己的功能，
 然后在处理消息时用 ``is_enabled(group_id, key)`` 判断。
@@ -143,8 +144,7 @@ def sync_external_features() -> None:
         logger.warning(f"[qqbot_group] 注册视频解析开关失败：{e}")
 
 
-# 内置功能
-register_feature("repeat", "复读", aliases=("复读机",))
+# 内置功能（repeat / teach 由 qqbot_repeat 插件注册）
 register_feature("poke", "戳一戳表情", aliases=("戳一戳", "拍一拍", "戳一戳回图"))
 register_feature("quotes", "金句", aliases=("金句库",))
 register_feature("meme", "表情包", aliases=("表情", "/表情"))
@@ -157,12 +157,12 @@ register_feature(
 register_feature(
     "greeting", "早安/晚安",
     default=False,
-    aliases=("早安", "晚安", "作息", "睡眠记录")
+    aliases=("早安", "晚安", "作息", "睡眠记录"),
 )
 register_feature(
     "work", "上班打卡",
     default=False,
-    aliases=("上班", "下班", "打卡", "工时")
+    aliases=("上班", "下班", "打卡", "工时"),
 )
 
 

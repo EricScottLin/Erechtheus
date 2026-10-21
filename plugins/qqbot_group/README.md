@@ -6,7 +6,8 @@ NoneBot2 本地插件，把群聊管理相关能力收拢在一个模块里：
 - **踢人**：`/踢`
 - **全员禁言**：`/全体禁言`、`/解除全体`
 - **撤回**：`/撤` 撤回机器人自己上一条消息
-- **复读**：连续相同文本达到阈值时跟着复读一次（默认 3 条、60 秒冷却）
+
+> 复读与「我说X你说Y」教学已拆到独立插件 [`qqbot_repeat`](../qqbot_repeat/README.md)。
 
 ## 命令
 
@@ -37,7 +38,6 @@ NoneBot2 本地插件，把群聊管理相关能力收拢在一个模块里：
 
 | key | 名称 | 说明 |
 |---|---|---|
-| `repeat` | 复读 | 连续相同文本/图片达到阈值时复读 |
 | `poke` | 戳一戳表情 | 被戳时随机回表情/金句 |
 | `quotes` | 金句 | `/金句` 与戳一戳抽金句 |
 | `meme` | 表情包 | `/表情` 随机表情 |
@@ -163,17 +163,18 @@ assets.register_asset_provider("my_plugin", my_assets)
 
 单个来源异常会被跳过，不影响其他来源。
 
-## 复读
+## 复读（已拆到 qqbot_repeat）
 
-无需命令：同一群内连续 **`qqbot_group_repeat_times` 个不同用户**（默认 3 人）
-发来相同的文本或**同一张表情包/图片**时，机器人会跟着复读一次，
-随后进入冷却（默认 60 秒）。
+复读与「我说X你说Y」教学现在由独立插件 `qqbot_repeat` 提供，
+`repeat` / `teach` 仍会注册进本插件的按群功能开关：
 
-- 文本与图片/表情都支持：图片按 QQ 的内容哈希文件名识别，表情按 id 识别
-- 按**不同用户数**计数：同一个人连发同样的内容不会触发
-- 以 `/` 开头的命令、空消息、超长文本、图文混合消息不参与（会重置计数）
-- 可用 `qqbot_group_repeat_enabled=false` 关闭，或用
-  `qqbot_group_repeat_include_images=false` 只复读文本
+```
+/本群功能
+/关闭 复读
+/关闭 教学
+```
+
+详见 [`plugins/qqbot_repeat/README.md`](../qqbot_repeat/README.md)。
 
 ## 权限模型
 
@@ -193,11 +194,6 @@ assets.register_asset_provider("my_plugin", my_assets)
 | `qqbot_group_smoke_max_seconds` | int | `28800` | `/烟` 随机禁言时长上限（秒，8 小时） |
 | `qqbot_group_ban_default_seconds` | int | `600` | `/禁言` 未指定时长时的默认禁言（秒） |
 | `qqbot_group_extra_admins` | set[int] | 空 | 额外允许使用群管命令的 QQ 号，支持 `123,456` 或 `[123,456]` |
-| `qqbot_group_repeat_enabled` | bool | `true` | 是否启用复读 |
-| `qqbot_group_repeat_include_images` | bool | `true` | 复读是否包含图片/表情 |
-| `qqbot_group_repeat_times` | int | `3` | 连续多少条相同文本触发复读（2–10） |
-| `qqbot_group_repeat_cooldown` | int | `60` | 同一群两次复读的最小间隔（秒） |
-| `qqbot_group_repeat_max_len` | int | `200` | 超过该长度的消息不参与复读 |
 
 ## 实现要点
 
@@ -221,6 +217,5 @@ plugins/qqbot_group/
 ├── kick.py          # /踢
 ├── whole.py         # /全体禁言 /解除全体
 ├── recall.py        # /撤
-├── repeat.py        # 复读
 └── README.md
 ```

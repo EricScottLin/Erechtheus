@@ -6,8 +6,9 @@
 - 踢人：``/踢``
 - 全员禁言：``/全体禁言``、``/解除全体``
 - 撤回：``/撤``（撤回机器人自己上一条消息）
-- 复读：连续相同文本/图片达到阈值时跟着复读一次（默认 3 个不同用户、60 秒冷却）
 - 按群功能开关：``/本群功能``、``/开启 <功能>``、``/关闭 <功能>``
+
+复读与「我说X你说Y」教学已拆到独立插件 ``qqbot_repeat``。
 
 权限模型：
 
@@ -16,7 +17,7 @@
     3. 禁言、踢人、全员禁言还要求机器人自身是本群管理员；
        ``/撤`` 只撤回机器人自己的消息，因此只校验发送者
 
-代码按功能拆分为子模块（mute / kick / whole / recall / repeat），
+代码按功能拆分为子模块（mute / kick / whole / recall），
 ``__init__.py`` 负责插件元信息与导入注册。
 
 遵循 NoneBot 官方插件编写规范：
@@ -36,14 +37,13 @@ from . import kick as kick  # noqa: F401
 from . import mute as mute  # noqa: F401
 from . import permissions as permissions  # noqa: F401  （注册发送记录钩子）
 from . import recall as recall  # noqa: F401
-from . import repeat as repeat  # noqa: F401
 from . import selfmute as selfmute  # noqa: F401
 from . import whole as whole  # noqa: F401
 from . import work as work  # noqa: F401
 
 __plugin_meta__ = PluginMetadata(
     name="群聊管理",
-    description="群聊管理：禁言/踢人/全体禁言、/撤 撤回、复读、按群功能开关",
+    description="群聊管理：禁言/踢人/全体禁言、/撤 撤回、按群功能开关",
     usage="""\
 /烟 @用户           随机禁言（默认 1 分钟 ~ 8 小时）
 /禁言 @用户 [时长]   指定时长禁言，如 /禁言 @他 30m，默认 10 分钟
@@ -59,10 +59,9 @@ __plugin_meta__ = PluginMetadata(
 说「精致睡眠」       随机 6~12 小时禁言自己（管理员可 @别人）
 说「禁言套餐」       随机 1~60 分钟禁言自己（管理员可 @别人）
 说「晚安」/「早安」  记录作息，按睡眠时长发月币（每天一次）
-说「上班」/「下班」  打卡计算工时，按劳动法发工资/加班费
-（复读无需命令：连续 3 个不同用户发相同文本/图片时自动复读）""",
+说「上班」/「下班」  打卡计算工时，按劳动法发工资/加班费""",
     type="application",
-    homepage="https://github.com/nonebot-qqbot",
+    homepage="https://github.com/EricScottLin/Erechtheus",
     config=Config,
     supported_adapters={"~onebot.v11"},
 )

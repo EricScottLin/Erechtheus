@@ -12,10 +12,6 @@ NoneBot 的插件配置通过 pydantic 模型声明，配置项从环境变量 /
     qqbot_group_ban_default_seconds=600
     # 额外允许使用群管命令的 QQ 号
     qqbot_group_extra_admins=123456,789012
-    # 复读：连续相同文本达到几次触发、冷却时间、最大长度
-    qqbot_group_repeat_enabled=true
-    qqbot_group_repeat_times=3
-    qqbot_group_repeat_cooldown=60
 """
 
 import re
@@ -94,26 +90,6 @@ class Config(BaseModel):
     )
     qqbot_group_work_holidays: str = Field(
         default="", description="法定节假日（逗号分隔 YYYY-MM-DD，按 3 倍计薪）",
-    )
-
-    # ---- 复读 ----
-    qqbot_group_repeat_enabled: bool = Field(
-        default=True, description="是否启用复读",
-    )
-    qqbot_group_repeat_include_images: bool = Field(
-        default=True, description="复读是否包含图片/表情",
-    )
-    qqbot_group_repeat_times: int = Field(
-        default=3, ge=2, le=10,
-        description="连续出现多少次相同文本后复读",
-    )
-    qqbot_group_repeat_cooldown: int = Field(
-        default=60, ge=0, le=3600,
-        description="同一群两次复读的最小间隔（秒）",
-    )
-    qqbot_group_repeat_max_len: int = Field(
-        default=200, ge=1, le=2000,
-        description="超过该长度的消息不参与复读",
     )
 
     @field_validator("qqbot_group_extra_admins", mode="before")

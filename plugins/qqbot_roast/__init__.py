@@ -22,6 +22,6 @@ __plugin_meta__ = PluginMetadata(
 /骂 @某人            随机吐槽一句（也可回复消息后发 /骂）
 （不指定对象时吐槽发言者自己；默认关闭，管理员用 /开启 骂 打开）""",
     type="application",
-    homepage="https://github.com/nonebot-qqbot",
+    homepage="https://github.com/EricScottLin/Erechtheus",
     supported_adapters={"~onebot.v11"},
 )

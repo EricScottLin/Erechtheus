@@ -1,12 +1,14 @@
-"""复读：连续相同文本 / 表情包时跟着复读一次。
+"""连续复读：连续相同文本 / 表情包时跟着复读一次。
 
 规则：
+
 - 同一群内，连续 **不同用户** 发来相同的文本或同一张图/表情，人数达到
-  ``qqbot_group_repeat_times``（默认 3）时复读一次；
+  ``qqbot_repeat_times``（默认 3）时复读一次；
 - 同一个人重复发不增加人数（避免单人刷屏触发）；
 - 图片按 ``file``（QQ 的内容哈希文件名）识别，表情（mface）按 ``id``/``summary`` 识别；
-- 触发后进入 ``qqbot_group_repeat_cooldown`` 秒冷却（默认 60 秒）；
-- 命令消息（以 / 开头）、空消息、超长文本不参与；图文混合消息会重置计数。
+- 触发后进入 ``qqbot_repeat_cooldown`` 秒冷却（默认 60 秒）；
+- 命令消息（以 / 开头）、空消息、超长文本不参与；图文混合消息会重置计数；
+- 「我说X你说Y」教学命令本身不参与复读。
 """
 
 import time
@@ -18,7 +20,8 @@ from nonebot.adapters.onebot.v11 import Bot, GroupMessageEvent, MessageSegment
 from . import features
 from .config import plugin_config
 
-# 优先级放低：命令响应器（priority=5, block=True）先处理，复读只关心普通聊天
+# 优先级放低：命令响应器（priority=5, block=True）先处理，复读只关心普通聊天。
+# 教学/触发响应器在 priority=10/11 且 block=True，命中时不会走到这里。
 repeat = on_message(priority=90, block=False)
 
 IMAGE_TYPES = ("image", "mface")
@@ -63,11 +66,14 @@ def _candidate(event: GroupMessageEvent) -> tuple[tuple, MessageSegment] | None:
             text = str(seg.data.get("text") or "").strip()
             if not text or text.startswith("/"):
                 return None
-            if len(text) > plugin_config.qqbot_group_repeat_max_len:
+            # 教学命令不参与复读，避免「我说X你说Y」被当成普通聊天跟发
+            if text.startswith("我说") and "你说" in text:
+                return None
+            if len(text) > plugin_config.qqbot_repeat_max_len:
                 return None
             return ("text", text), MessageSegment.text(text)
         if seg.type in IMAGE_TYPES:
-            if not plugin_config.qqbot_group_repeat_include_images:
+            if not plugin_config.qqbot_repeat_include_images:
                 return None
             key = _image_key(seg)
             if key is None:
@@ -80,7 +86,9 @@ def _candidate(event: GroupMessageEvent) -> tuple[tuple, MessageSegment] | None:
         text = "".join(str(s.data.get("text") or "") for s in segs).strip()
         if not text or text.startswith("/"):
             return None
-        if len(text) > plugin_config.qqbot_group_repeat_max_len:
+        if text.startswith("我说") and "你说" in text:
+            return None
+        if len(text) > plugin_config.qqbot_repeat_max_len:
             return None
         return ("text", text), MessageSegment.text(text)
     return None
@@ -99,7 +107,7 @@ async def _send_repeat(seg: MessageSegment) -> None:
 async def handle_repeat(bot: Bot, event: GroupMessageEvent) -> None:
     """连续相同文本/图片达到人数阈值时复读一次。"""
     cfg = plugin_config
-    if not cfg.qqbot_group_repeat_enabled:
+    if not cfg.qqbot_repeat_enabled:
         return
     if not features.is_enabled(event.group_id, "repeat"):
         return
@@ -121,7 +129,7 @@ async def handle_repeat(bot: Bot, event: GroupMessageEvent) -> None:
         run = _Run(key=key, seg=seg, users={uid})
         _state[event.group_id] = run
 
-    if len(run.users) < cfg.qqbot_group_repeat_times:
+    if len(run.users) < cfg.qqbot_repeat_times:
         return
 
     now = time.time()
@@ -129,6 +137,6 @@ async def handle_repeat(bot: Bot, event: GroupMessageEvent) -> None:
         _state.pop(event.group_id, None)
         return
 
-    _cooldown[event.group_id] = now + cfg.qqbot_group_repeat_cooldown
+    _cooldown[event.group_id] = now + cfg.qqbot_repeat_cooldown
     _state.pop(event.group_id, None)
     await _send_repeat(seg)

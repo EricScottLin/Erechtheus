@@ -45,7 +45,7 @@ __plugin_meta__ = PluginMetadata(
 /金句                随机一条金句
 /金句添加 <内容>     收录金句（管理员）""",
     type="application",
-    homepage="https://github.com/nonebot-qqbot",
+    homepage="https://github.com/EricScottLin/Erechtheus",
     config=Config,
     supported_adapters={"~onebot.v11"},
 )

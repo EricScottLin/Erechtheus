@@ -112,7 +112,7 @@ async def _keyword_rule(event: GroupMessageEvent) -> bool:
     return match_preset(event.get_plaintext()) is not None
 
 
-# 优先级 6：在普通命令（5）之后、复读（90）之前
+# 优先级 6：在普通命令（5）之后、普通消息复读（90）之前
 selfmute = on_message(rule=_keyword_rule, priority=6, block=True)
 
 
