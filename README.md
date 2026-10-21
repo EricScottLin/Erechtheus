@@ -34,6 +34,7 @@ LLBot 的 WebUI(3081) 与 OneBot WS(3001) 由配置文件强制绑定 `127.0.0.1
 | `qqbot_roast` | 自研 | **吐槽/电猪/梗图**：`/骂`、`/电`、`/梗`（私聊上传触发词→表情包）（默认关闭，按群开关） |
 | `nonebot_plugin_bilibili` | vendored + 自研扩展（[GreaterLG70/nonebot-plugin-bilibili](https://github.com/GreaterLG70/nonebot-plugin-bilibili) 之上加了「发视频」） | 群里发B站链接 → 回 `y` 发压缩版视频；`/bilibili rank` 榜单；`/bilibili up` 查 UP 主 |
 | `nonebot_plugin_picmenu_next` | [lgc-NB2Dev/nonebot-plugin-picmenu-next](https://github.com/lgc-NB2Dev/nonebot-plugin-picmenu-next) | `/help`、`/帮助`、`/菜单` 图片帮助菜单（插件列表/详情/模糊搜索） |
+| `nonebot_plugin_nbnhhsh` | [ByteColtX/nonebot-plugin-nbnhhsh](https://github.com/ByteColtX/nonebot-plugin-nbnhhsh) | 「能不能好好说话」拼音缩写翻译：`/nbnhhsh yyds`、`/好好说话 yyds`、「yyds是啥」；默认出图 |
 | `nonebot_plugin_maimaidx` | [Yuri-YuzuChaN/nonebot-plugin-maimaidx](https://github.com/Yuri-YuzuChaN/nonebot-plugin-maimaidx) | 舞萌 DX 查分器 |
 
 > **为什么 bilibili 插件是 vendored 的**：PyPI 上的 `nonebot-plugin-bilibili`

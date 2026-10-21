@@ -62,9 +62,15 @@ nonebot.load_plugin("nonebot_plugin_maimaidx")
 # AI 烤猪/云存储/群日报均默认关闭，数据走 localstore（容器 /app/data，已持久化）
 nonebot.load_plugin("nonebot_plugin_rollpig_plus")
 
+# 拼音缩写翻译：/nbnhhsh、/好好说话（能不能好好说话 API）
+nonebot.load_plugin("nonebot_plugin_nbnhhsh")
+
 # 小猪宇宙：在 rollpig 之上扩展（图鉴成就 → Kleos；后续 DX PASS/斗兽场/牧场）
 # 依赖 rollpig（读猪圈）与 economy（发 Kleos），必须排在两者之后加载
 nonebot.load_plugin(Path("plugins/qqbot_pigverse"))
+
+# 临时诊断：捕获 send_msg 调用栈（定位「参数...匹配失败」发送者）
+nonebot.load_plugin(Path("plugins/qqbot_diag_botcall"))
 
 # 5. 启动
 nonebot.run()
