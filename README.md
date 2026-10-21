@@ -73,6 +73,8 @@ LLBot 的 WebUI(3081) 与 OneBot WS(3001) 由配置文件强制绑定 `127.0.0.1
 实现要点（踩坑记录见 `plugins/nonebot_plugin_bilibili/README.md`）：
 
 - 视频详情走 **wbi 签名的 `x/web-interface/wbi/view`** —— 裸 `view` 接口从机房 IP 请求会 412
+- 还要带 **buvid3/buvid4 设备指纹**（自动从 `x/frontend/finger/spi` 取，缓存到
+  `data/bili_buvid.json`）—— 不带的话机房 IP 连发必 412，现象就是「解析失败：B站临时风控」
 - 播放地址走 `x/player/playurl`：**匿名最高只有 480P**（实测请求 qn=64/80 也只回
   360P/480P），配了 `BILI_SESSDATA` 才能拿 720P，1080P 还要大会员
 - **ffmpeg 直连 CDN 边下边转**（带 Referer/UA），不再「先下载完再转码」——

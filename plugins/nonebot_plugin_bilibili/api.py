@@ -12,6 +12,7 @@
 """
 import asyncio
 import hashlib
+import json
 import os
 import re
 import time
@@ -28,8 +29,24 @@ HEADERS = {"User-Agent": UA, "Referer": "https://www.bilibili.com/"}
 # 可选：B站账号 Cookie。带上 SESSDATA 后 playurl 才会返回 720P/1080P
 # （匿名只有 360P/480P）。不配也能正常解析，只是最高 480P。
 SESSDATA = os.getenv("BILI_SESSDATA", "").strip()
-if SESSDATA:
-    HEADERS["Cookie"] = f"SESSDATA={SESSDATA}"
+
+
+def _apply_cookie(buvid3: str = "", buvid4: str = "") -> None:
+    """把 SESSDATA + buvid 拼进请求头。
+
+    buvid3/buvid4 是 B站给「匿名访客」发的设备指纹，别看不起眼：
+    机房 IP 不带它，`x/web-interface/wbi/view` 连续请求必然 412（实测 6/6 挂）；
+    带上之后同样的连发 6/6 全 200。这是本插件最关键的防风控手段。
+    """
+    parts = []
+    if SESSDATA:
+        parts.append(f"SESSDATA={SESSDATA}")
+    if buvid3:
+        parts.append(f"buvid3={buvid3}")
+    if buvid4:
+        parts.append(f"buvid4={buvid4}")
+    if parts:
+        HEADERS["Cookie"] = "; ".join(parts)
 
 API_VIDEO = "https://api.bilibili.com/x/web-interface/view"
 API_WBI_VIDEO = "https://api.bilibili.com/x/web-interface/wbi/view"
@@ -40,6 +57,11 @@ API_RANKING = "https://api.bilibili.com/x/web-interface/ranking/v2"
 API_POPULAR = "https://api.bilibili.com/x/web-interface/popular"
 API_SEARCH_USER = "https://api.bilibili.com/x/web-interface/wbi/search/type"
 API_NAV = "https://api.bilibili.com/x/web-interface/nav"
+API_FINGER = "https://api.bilibili.com/x/frontend/finger/spi"
+
+# buvid 缓存文件（不用每次启动都去要一次，也不怕重启后头几分钟又被 412）
+_BUVID_FILE = Path(os.getenv("BILI_BUVID_FILE", "data/bili_buvid.json"))
+_buvid_ready = False
 
 TIMEOUT = 15.0
 
@@ -69,7 +91,8 @@ class BiliError(Exception):
 # 风控码：-352 请求过密 / -509 请求过于频繁 / -412 反爬
 RISK_CODES = {-352, -509, -412}
 RISK_TIP = "B站临时风控（请求太频繁），歇 30 秒再试~"
-_RISK_RETRY = 2
+_RISK_RETRY = 2                 # 风控重试次数（首次 + 2 次重试）
+_RISK_BACKOFF = (2.0, 5.0)      # 每次重试前等多久；机房 IP 的 412 几秒内多半能解
 
 
 class BiliRiskError(BiliError):
@@ -91,11 +114,46 @@ def _today() -> int:
     return int(time.time()) // 86400
 
 
+async def _ensure_buvid(client: httpx.AsyncClient, refresh: bool = False) -> None:
+    """确保请求头里有 buvid3/buvid4（设备指纹），没有就去要一对。
+
+    只做一次（失败也不阻塞主流程）；收到 412 时用 refresh=True 强制换一对再试。
+    优先读本地缓存，避免每次重启都多打一次 B站。
+    """
+    global _buvid_ready
+    if _buvid_ready and not refresh:
+        return
+    _buvid_ready = True
+    b3 = b4 = ""
+    if not refresh:
+        try:
+            cached = json.loads(_BUVID_FILE.read_text(encoding="utf-8"))
+            b3, b4 = cached.get("b_3", ""), cached.get("b_4", "")
+        except Exception:
+            pass
+    if not b3:
+        try:
+            r = await client.get(API_FINGER, headers=HEADERS, timeout=TIMEOUT)
+            data = (r.json() or {}).get("data") or {}
+            b3, b4 = data.get("b_3", ""), data.get("b_4", "")
+            if b3:
+                try:
+                    _BUVID_FILE.parent.mkdir(parents=True, exist_ok=True)
+                    _BUVID_FILE.write_text(
+                        json.dumps({"b_3": b3, "b_4": b4}), encoding="utf-8")
+                except Exception as e:
+                    logger.debug(f"[bilibili] 缓存 buvid 失败: {e}")
+        except Exception as e:
+            logger.warning(f"[bilibili] 获取 buvid 失败（解析仍可继续）: {e}")
+    _apply_cookie(b3, b4)
+
+
 async def _get_mixin_key(client: httpx.AsyncClient) -> str:
     """取 wbi mixin_key，按天缓存。"""
     global _mixin_key, _mixin_key_day
     if _mixin_key and _mixin_key_day == _today():
         return _mixin_key
+    await _ensure_buvid(client)
     r = await client.get(API_NAV, headers=HEADERS, timeout=TIMEOUT)
     r.raise_for_status()
     wbi = r.json()["data"]["wbi_img"]
@@ -124,6 +182,7 @@ async def _wbi_get(client: httpx.AsyncClient, url: str, params: dict) -> dict:
     `x/web-interface/view` 从机房 IP 直连会被 412（2026-10 实测，本机同 IP 上
     nav/popular/card 都 200，唯独 view 412），但走 wbi 签名的
     `x/web-interface/wbi/view` 正常返回 —— 这是 B站 web 播放器自己用的入口。
+    再配上 buvid 设备指纹后连发也不会 412（见 _ensure_buvid）。
     """
     key = await _get_mixin_key(client)
     return await _jget(client, url, _wbi_sign(params, key))
@@ -133,9 +192,11 @@ async def _jget(client: httpx.AsyncClient, url: str, params: dict,
                 _try: int = 0) -> dict:
     """GET 并校验 B站业务码。
 
-    对风控码（-352/-509/412）做指数退避重试：B站的风控多是"同一IP短时间
-    请求过密"造成的瞬时拦截，退避 1.2s / 2.4s 后重试基本能过（2026-09 实测）。
+    对风控码（-352/-509/412）做退避重试。注意 B站机房 IP 的 412 一旦触发，
+    通常要几秒到几十秒才解除，所以退避是 2s / 5s / 10s；第一次撞上时先换一对
+    buvid 设备指纹再试（换掉后基本立刻恢复）。
     """
+    await _ensure_buvid(client)
     try:
         r = await client.get(url, params=params, headers=HEADERS, timeout=TIMEOUT)
     except Exception as e:
@@ -143,7 +204,9 @@ async def _jget(client: httpx.AsyncClient, url: str, params: dict,
 
     if r.status_code == 412:
         if _try < _RISK_RETRY:
-            await asyncio.sleep(1.2 * (2 ** _try))
+            if _try == 0:
+                await _ensure_buvid(client, refresh=True)
+            await asyncio.sleep(_RISK_BACKOFF[min(_try, len(_RISK_BACKOFF) - 1)])
             return await _jget(client, url, params, _try + 1)
         raise BiliRiskError(-412)
 
@@ -156,7 +219,9 @@ async def _jget(client: httpx.AsyncClient, url: str, params: dict,
     if code != 0:
         if code in RISK_CODES:
             if _try < _RISK_RETRY:
-                await asyncio.sleep(1.2 * (2 ** _try))
+                if _try == 0:
+                    await _ensure_buvid(client, refresh=True)
+                await asyncio.sleep(_RISK_BACKOFF[min(_try, len(_RISK_BACKOFF) - 1)])
                 return await _jget(client, url, params, _try + 1)
             raise BiliRiskError(code)
         raise BiliError(f"B站返回错误 code={code}：{j.get('message') or '未知错误'}")
