@@ -9,11 +9,16 @@ from nonebot.log import logger
 from nonebot.params import CommandArg
 
 from . import feature_gate, library, providers
+
+try:
+    from . import sheet
+except Exception:  # noqa: BLE001 —— 没装 Pillow 时退化为逐张预览
+    sheet = None  # type: ignore[assignment]
 from .config import plugin_config
 from .permissions import is_admin
 
 random_cmd = on_command("表情", aliases={"发表情"}, priority=5, block=True)
-list_cmd = on_command("表情列表", priority=5, block=True)
+list_cmd = on_command("表情列表", aliases={"列表表情"}, priority=5, block=True)
 add_cmd = on_command("表情添加", aliases={"添加表情"}, priority=5, block=True)
 del_cmd = on_command("表情删除", aliases={"删除表情"}, priority=5, block=True)
 
@@ -118,17 +123,30 @@ async def handle_list(event: MessageEvent) -> None:
         f"来源加权模式 {plugin_config.qqbot_meme_source_weighting}"
     )
 
-    if files:
-        lines.append("────────────")
-        lines.append("本地表情（用 /表情删除 <序号> 删除）：")
-        lines.append("下面逐张预览，每张前面标了序号")
-    else:
-        lines.append("本地表情库还是空的，管理员可用 /表情添加 投稿。")
-
     if not files:
+        lines.append("本地表情库还是空的，管理员可用 /表情添加 投稿。")
         await list_cmd.finish("\n".join(lines))
 
-    # 总览先发出去，再逐张预览，方便对着图选序号
+    # 拼成一张带序号的总览大图，避免逐张刷屏
+    png = b""
+    if sheet is not None:
+        try:
+            png = sheet.render_grid(
+                files, title="本地表情", subtitle=f"共 {len(files)} 张"
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"[qqbot_meme] 生成表情总览失败：{e}")
+
+    if png:
+        lines.append("────────────")
+        lines.append("下面一张图就是全部本地表情，序号对应 /表情删除 <序号>")
+        await list_cmd.finish(
+            Message(MessageSegment.text("\n".join(lines))) + MessageSegment.image(png)
+        )
+
+    # 拼图失败时退化成逐张发送
+    lines.append("────────────")
+    lines.append("本地表情（拼图失败，逐张预览）：")
     await list_cmd.send("\n".join(lines))
     for i, p in enumerate(files, 1):
         try:
@@ -140,7 +158,7 @@ async def handle_list(event: MessageEvent) -> None:
         await list_cmd.send(
             Message(MessageSegment.text(f"{i}.")) + MessageSegment.image(data)
         )
-    await list_cmd.finish("预览完啦～删除哪张就发：/表情删除 <序号>")
+    await list_cmd.finish("删除哪张就发：/表情删除 <序号>")
 
 
 # ---------------------------------------------------------------- /表情添加
