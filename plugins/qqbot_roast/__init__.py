@@ -12,6 +12,7 @@ from nonebot.plugin import PluginMetadata
 
 from . import dian as dian  # noqa: F401
 from . import features as features  # noqa: F401  （注册按群开关）
+from . import meme as meme  # noqa: F401
 from . import roast as roast  # noqa: F401
 
 __plugin_meta__ = PluginMetadata(

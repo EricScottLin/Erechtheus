@@ -6,6 +6,7 @@ from nonebot.log import logger
 _KEYS = (
     ("roast", "骂/吐槽", ("骂", "吐槽", "锐评", "嘴臭")),
     ("dian", "电猪", ("电", "电猪", "电他")),
+    ("meme_reply", "梗图", ("梗图", "男德", "表情包回复")),
 )
 _registered = False
 
