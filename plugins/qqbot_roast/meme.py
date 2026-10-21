@@ -68,13 +68,19 @@ async def _fetch(bot: Bot, url: str) -> bytes | None:
     return None
 
 
-def _parse(msg: Message) -> tuple[str, str]:
-    """拆出 ``(子命令, 触发词)``。"""
+def _parse(msg: Message) -> tuple[str, str, str]:
+    """拆出 ``(子命令, 触发词, 序号/文件名前缀)``。"""
     text = msg.extract_plain_text().strip()
-    parts = text.split(maxsplit=1)
+    parts = text.split()
     if not parts:
-        return "", ""
-    return parts[0], (parts[1].strip() if len(parts) > 1 else "")
+        return "", "", ""
+    sub = parts[0]
+    rest = parts[1:]
+    index = ""
+    # 末尾的纯数字或哈希前缀当作「第几张」
+    if len(rest) >= 2 and rest[-1].isdigit():
+        index, rest = rest[-1], rest[:-1]
+    return sub, " ".join(rest).strip(), index
 
 
 meme_cmd = on_command("梗", aliases={"梗图"}, priority=4, block=True)
@@ -82,15 +88,29 @@ meme_cmd = on_command("梗", aliases={"梗图"}, priority=4, block=True)
 HELP = """📚 梗图库（全局共享，仅超级用户可上传）
 /梗                    显示这条说明
 /梗 列表                查看所有触发词和图片数量
+/梗 查看 <触发词>        看有哪些图（带序号，回复里附预览）
 /梗 添加 <触发词>        附一张图或回复一张图上传
-/梗 删除 <触发词>        删除该触发词的所有图
+/梗 删除 <触发词> <序号>  只删那一张；不带序号则删该触发词下所有图
 群里整句说出触发词，就会随机发一张对应的图。
 （梗图全局生效，各群用 /开启 梗图 或 /关闭 梗图 控制）"""
 
 
+def _view_msg(trigger: str, files: list[str]) -> Message:
+    """把触发词下的图按序号列出，最多预览 8 张。"""
+    msg = Message(MessageSegment.text(f"📚「{trigger}」共 {len(files)} 张：\n"))
+    for i, name in enumerate(files, 1):
+        msg += MessageSegment.text(f"{i}. {name}\n")
+    for name in files[:8]:
+        path = library.image_path(name)
+        if path.is_file():
+            msg += MessageSegment.image(path.read_bytes())
+    msg += MessageSegment.text("\n删除某张：/梗 删除 " + trigger + " <序号>")
+    return msg
+
+
 @meme_cmd.handle()
 async def handle_meme(bot: Bot, event: MessageEvent, arg: Message = CommandArg()) -> None:
-    sub, trigger = _parse(arg)
+    sub, trigger, index = _parse(arg)
 
     if not _is_superuser(event):
         await meme_cmd.finish("梗图上传只开放给机器人超级用户，其他人请找管理员。")
@@ -104,6 +124,14 @@ async def handle_meme(bot: Bot, event: MessageEvent, arg: Message = CommandArg()
             await meme_cmd.finish("梗图库还是空的，用 /梗 添加 <触发词> 上传。")
         lines = [f"· {k}（{len(v)} 张）" for k, v in sorted(triggers.items())]
         await meme_cmd.finish("📚 梗图触发词：\n" + "\n".join(lines))
+
+    if sub in ("查看", "详情", "show"):
+        if not trigger:
+            await meme_cmd.finish("用法：/梗 查看 <触发词>")
+        files = library.memes_for(trigger)
+        if not files:
+            await meme_cmd.finish(f"没有「{trigger}」这个触发词。")
+        await meme_cmd.finish(_view_msg(trigger, files))
 
     if sub in ("添加", "上传", "add"):
         if not trigger:
@@ -137,11 +165,37 @@ async def handle_meme(bot: Bot, event: MessageEvent, arg: Message = CommandArg()
 
     if sub in ("删除", "清空", "del"):
         if not trigger:
-            await meme_cmd.finish("用法：/梗 删除 <触发词>")
-        removed = await library.remove_meme(trigger)
-        if not removed:
+            await meme_cmd.finish("用法：/梗 删除 <触发词> [序号]")
+        files = library.memes_for(trigger)
+        if not files:
             await meme_cmd.finish(f"没有「{trigger}」这个触发词。")
-        await meme_cmd.finish(f"🗑️ 已删除「{trigger}」的 {removed} 张图。")
+
+        if not index:
+            removed = await library.remove_meme(trigger)
+            await meme_cmd.finish(
+                f"🗑️ 已删除「{trigger}」的全部 {removed} 张图。\n"
+                "只想删某一张请用：/梗 查看 " + trigger + " 看序号，再 /梗 删除 " + trigger + " <序号>"
+            )
+
+        target = ""
+        if index.isdigit():
+            pos = int(index)
+            if not 1 <= pos <= len(files):
+                await meme_cmd.finish(
+                    f"「{trigger}」只有 {len(files)} 张，序号要在 1~{len(files)} 之间。"
+                )
+            target = files[pos - 1]
+        else:
+            matched = library.find_name_by_prefix(trigger, index)
+            if not matched:
+                await meme_cmd.finish(f"「{trigger}」里没有文件名以 {index} 开头的图。")
+            target = matched[0]
+
+        await library.remove_meme(trigger, target)
+        left = len(library.memes_for(trigger))
+        await meme_cmd.finish(
+            f"🗑️ 已删除「{trigger}」的 {target}，还剩 {left} 张。"
+        )
 
     await meme_cmd.finish(HELP)
 

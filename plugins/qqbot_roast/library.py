@@ -104,20 +104,42 @@ async def add_meme(trigger: str, image: bytes) -> tuple[str, bool]:
     return name, is_new
 
 
-async def remove_meme(trigger: str) -> int:
-    """删除某个触发词的所有图，返回删除数量。"""
+async def remove_meme(trigger: str, name: str | None = None) -> int:
+    """删除某个触发词的图，返回删除数量。
+
+    ``name`` 为空时删除该触发词的所有图；给了文件名则只删那一张。
+    """
+    trigger = trigger.strip()
     async with _lock:
         data = _load()
-        files = data.pop(trigger.strip(), None)
+        files = data.get(trigger)
         if not files:
             return 0
-        for target in files:
+        targets = [name] if name else list(files)
+        removed = 0
+        for target in targets:
+            if target not in files:
+                continue
             try:
                 image_path(target).unlink(missing_ok=True)
             except Exception as e:  # noqa: BLE001
                 logger.warning(f"[qqbot_roast] 删除梗图 {target} 失败：{e}")
+            files.remove(target)
+            removed += 1
+        if files:
+            data[trigger] = files
+        else:
+            data.pop(trigger, None)
         _save(data)
-        return len(files)
+        return removed
+
+
+def find_name_by_prefix(trigger: str, prefix: str) -> list[str]:
+    """按文件名前缀（哈希前几位）查找触发词下的图。"""
+    prefix = prefix.strip().lower()
+    if not prefix:
+        return []
+    return [f for f in memes_for(trigger) if f.lower().startswith(prefix)]
 
 
 def triggers_of() -> dict[str, list[str]]:
