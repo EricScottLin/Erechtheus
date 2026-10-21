@@ -74,5 +74,8 @@ nonebot.load_plugin("nonebot_plugin_nbnhhsh")
 # 依赖 rollpig（读猪圈）与 economy（发 Kleos），必须排在两者之后加载
 nonebot.load_plugin(Path("plugins/qqbot_pigverse"))
 
+# AI 问答：喊「小e <问题>」提问，可联网搜索、可看图（qqbot_ai）
+nonebot.load_plugin(Path("plugins/qqbot_ai"))
+
 # 5. 启动
 nonebot.run()

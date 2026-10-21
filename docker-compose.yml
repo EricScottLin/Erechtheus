@@ -88,3 +88,7 @@ services:
       # 插件运行时数据（LOCALSTORE_USE_CWD=true 时 localstore 落在 /app/data）。
       # 必须挂出来，否则容器重建后签到记录、金币、捕鱼进度全部丢失
       - ./data:/app/data:rw
+      # llbot 的图片缓存（只读挂载）：qqbot_ai 看图时，图片段给的 file:// 路径
+      # 指向 llbot 容器内的 /app/llbot/data/temp，NoneBot 容器本来读不到；
+      # 挂进来后插件会按文件名回退到这里读，不依赖 enableLocalFile2Url
+      - ${LLBOT_DATA_DIR:-./llbot-data}:/llbot-data:ro
