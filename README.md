@@ -68,6 +68,23 @@ LLBot 的 WebUI(3081) 与 OneBot WS(3001) 由配置文件强制绑定 `127.0.0.1
 获取 `BILI_SESSDATA`：浏览器登录 bilibili.com → F12 → Application → Cookies →
 复制 `SESSDATA` 的值填进 `.env`，然后 `docker compose up -d nonebot`。
 
+三种写法都认，粘贴时不用自己裁：
+
+```bash
+BILI_SESSDATA=a1b2c3%2C1792...%2Cxy12%2A31                        # 纯值
+BILI_SESSDATA=SESSDATA=a1b2c3%2C1792...%2Cxy12%2A31               # 键值对
+BILI_SESSDATA="SESSDATA=..; bili_jct=..; DedeUserID=.."          # 整段 Cookie
+```
+
+填完重启时日志会自检：
+
+```
+[bilibili] B站账号已登录：牧歌（大会员）。720P 可用，1080P 需大会员
+[bilibili] BILI_SESSDATA 无效或已过期（账号未登录），画质回落到 480P
+```
+
+`buvid3`/`buvid4` 不用管，插件会自动取。
+
 默认**不 @ 机器人也会响应**（群聊），但要求发链接者回 `y` 确认，避免刷屏和大流量下载。
 
 实现要点（踩坑记录见 `plugins/nonebot_plugin_bilibili/README.md`）：

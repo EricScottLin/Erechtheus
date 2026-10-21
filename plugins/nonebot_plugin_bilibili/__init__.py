@@ -44,6 +44,7 @@ from nonebot.rule import Rule
 from nonebot.typing import T_State
 
 from . import sender
+from .api import check_account
 from .api import (
     BiliError,
     BiliRiskError,
@@ -629,7 +630,12 @@ async def _handle_at_cmd(event, bot, state: T_State):
 # ---------- ⑤ 启动日志：确认 B站账号 Cookie 是否生效 ----------
 @get_driver().on_startup
 async def _log_account_status():
-    if sender.has_account():
-        logger.info("[bilibili] 已配置 BILI_SESSDATA：可请求 720P（1080P 还需大会员）")
+    if not sender.has_account():
+        logger.info("[bilibili] 未配置 BILI_SESSDATA：画质上限 480P"
+                    "（配了才能 y 720p / y 1080p）")
+        return
+    ok, info = await check_account()
+    if ok:
+        logger.info(f"[bilibili] B站账号已登录：{info}。720P 可用，1080P 需大会员")
     else:
-        logger.info("[bilibili] 未配置 BILI_SESSDATA：画质上限 480P（配了才能 y 720p / y 1080p）")
+        logger.warning(f"[bilibili] BILI_SESSDATA 无效或已过期（{info}），画质回落到 480P")

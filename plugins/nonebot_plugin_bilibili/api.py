@@ -28,11 +28,42 @@ HEADERS = {"User-Agent": UA, "Referer": "https://www.bilibili.com/"}
 
 # 可选：B站账号 Cookie。带上 SESSDATA 后 playurl 才会返回 720P/1080P
 # （匿名只有 360P/480P）。不配也能正常解析，只是最高 480P。
-SESSDATA = os.getenv("BILI_SESSDATA", "").strip()
+#
+# BILI_SESSDATA 支持三种写法，粘贴时不用自己裁剪：
+#   1) 只填值：       a1b2c3%2C1792...%2Cxy12%2A31
+#   2) 填键值对：     SESSDATA=a1b2c3%2C1792...
+#   3) 整段 Cookie：  SESSDATA=a1b2c3...; bili_jct=xxx; DedeUserID=12345
+# 第 3 种会额外保留 bili_jct / DedeUserID 等（B站某些接口要它们才认登录态）。
+_RAW_SESSDATA = os.getenv("BILI_SESSDATA", "").strip()
+_EXTRA_COOKIE: dict[str, str] = {}
+SESSDATA = _RAW_SESSDATA
+
+
+def _parse_session_cookie(raw: str) -> None:
+    """把 BILI_SESSDATA 的三种写法统一拆成 SESSDATA + 附加 Cookie。"""
+    global SESSDATA
+    if not raw:
+        return
+    if "=" not in raw and ";" not in raw:      # 写法 1：纯值
+        SESSDATA = raw
+        return
+    for part in raw.replace("Cookie:", "").split(";"):
+        part = part.strip()
+        if not part or "=" not in part:
+            continue
+        k, v = part.split("=", 1)
+        k, v = k.strip(), v.strip()
+        if k.lower() == "sessdata":
+            SESSDATA = v
+        else:
+            _EXTRA_COOKIE[k] = v
+
+
+_parse_session_cookie(_RAW_SESSDATA)
 
 
 def _apply_cookie(buvid3: str = "", buvid4: str = "") -> None:
-    """把 SESSDATA + buvid 拼进请求头。
+    """把 SESSDATA + 附加 Cookie + buvid 拼进请求头。
 
     buvid3/buvid4 是 B站给「匿名访客」发的设备指纹，别看不起眼：
     机房 IP 不带它，`x/web-interface/wbi/view` 连续请求必然 412（实测 6/6 挂）；
@@ -41,6 +72,7 @@ def _apply_cookie(buvid3: str = "", buvid4: str = "") -> None:
     parts = []
     if SESSDATA:
         parts.append(f"SESSDATA={SESSDATA}")
+    parts += [f"{k}={v}" for k, v in _EXTRA_COOKIE.items()]
     if buvid3:
         parts.append(f"buvid3={buvid3}")
     if buvid4:
@@ -112,6 +144,24 @@ class NotVideoLink(BiliError):
 
 def _today() -> int:
     return int(time.time()) // 86400
+
+
+async def check_account() -> tuple[bool, str]:
+    """用 nav 接口确认 SESSDATA 是否还有效。返回 (是否登录, 昵称或失败原因)。"""
+    if not SESSDATA:
+        return False, "未配置 BILI_SESSDATA"
+    async with httpx.AsyncClient() as client:
+        await _ensure_buvid(client)
+        try:
+            r = await client.get(API_NAV, headers=HEADERS, timeout=TIMEOUT)
+            j = r.json()
+        except Exception as e:
+            return False, f"请求失败：{type(e).__name__}"
+    if j.get("code") == 0:
+        data = j.get("data") or {}
+        vip = data.get("vipStatus") == 1 or int(data.get("vipType") or 0) > 0
+        return True, f"{data.get('uname') or '?'}（{'大会员' if vip else '普通账号'}）"
+    return False, j.get("message") or f"code={j.get('code')}"
 
 
 async def _ensure_buvid(client: httpx.AsyncClient, refresh: bool = False) -> None:
