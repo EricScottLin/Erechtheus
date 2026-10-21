@@ -16,8 +16,8 @@
    BILI_VIDEO_AUTO=1         群里不用 @ 也自动响应链接（0=必须@）
    BILI_VIDEO_GROUPS=        只在这些群自动响应（逗号分隔，空=所有群）
    BILI_VIDEO_CONFIRM=1      先回信息卡+让用户回 y 确认（0=直接发）
-   BILI_VIDEO_MAX_DURATION=600  超过这个秒数不发
-   BILI_VIDEO_MAX_MB=20      压缩后体积上限（MB）
+   BILI_VIDEO_MAX_DURATION=1800 超过这个秒数不发（30 分钟）
+   BILI_VIDEO_MAX_MB=20      480P 体积上限（MB），长视频按最低码率自动放宽
    BILI_VIDEO_HEIGHT=480     压缩后最大高度
    BILI_VIDEO_CRF=30         越大越糊、越小越清晰
    BILI_VIDEO_QN=64          下载源画质（64=720P，32=480P）

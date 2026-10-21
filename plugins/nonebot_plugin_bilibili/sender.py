@@ -34,8 +34,8 @@ from .api import (
 
 # ---------------- 可配置项（环境变量，.env.prod 里可改） ----------------
 ENABLE = os.getenv("BILI_VIDEO_ENABLE", "1") == "1"
-MAX_DURATION = int(os.getenv("BILI_VIDEO_MAX_DURATION", "600"))   # 秒，超了不发
-MAX_MB = float(os.getenv("BILI_VIDEO_MAX_MB", "20"))              # 压缩后上限
+MAX_DURATION = int(os.getenv("BILI_VIDEO_MAX_DURATION", "1800"))  # 秒，超了不发
+MAX_MB = float(os.getenv("BILI_VIDEO_MAX_MB", "20"))              # 压缩后上限（480P 基准）
 HEIGHT = int(os.getenv("BILI_VIDEO_HEIGHT", "480"))               # 压缩后最大高度
 CRF = int(os.getenv("BILI_VIDEO_CRF", "30"))                      # 越大越糊越小
 QN = int(os.getenv("BILI_VIDEO_QN", "64"))                        # 源画质(64=720P)
@@ -44,6 +44,8 @@ QN = int(os.getenv("BILI_VIDEO_QN", "64"))                        # 源画质(64
 QUALITY_QN = {360: 16, 480: 32, 720: 64, 1080: 80}       # playurl 请求的 qn
 QUALITY_MAX_MB = {360: 15.0, 480: 20.0, 720: 40.0, 1080: 80.0}
 QUALITY_KBPS = {360: 160, 480: 280, 720: 650, 1080: 1300}  # 估算体积用
+MIN_VBR = 150        # 视频码率地板（kbps），再低就没法看了
+AUDIO_KBPS = 64      # 音频码率（kbps），算体积上限时必须一起算进去
 TMP_DIR = Path(os.getenv("BILI_VIDEO_TMP", "data/bili_video"))
 
 # QQ 视频消息对时长/体积有限制（客户端与服务端都可能拒绝），这里保守一点
@@ -91,13 +93,27 @@ def quality_of(height: int) -> int:
     return min(QUALITY_QN, key=lambda k: abs(k - int(height)))
 
 
+def max_mb_for(height: int, duration: int) -> float:
+    """这个画质/时长下的体积上限（MB）。
+
+    - 短视频：就是画质档位的固定上限（480P 默认 20MB，可用 BILI_VIDEO_MAX_MB 改）
+    - 长视频：480P 视频压到 150kbps、音频 64kbps 也要 35MB+，死守 20MB 就永远
+      发不出去，所以按「(视频地板+音频) × 时长」自动放宽
+      （对短视频没影响：它本来也压不到那么大）
+    """
+    h = quality_of(height)
+    base = MAX_MB if h <= 480 else QUALITY_MAX_MB[h]
+    floor_mb = (MIN_VBR + AUDIO_KBPS) * max(duration, 0) / 8 / 1024 * 1.05
+    return round(max(base, floor_mb), 1)
+
+
 def estimate_mb(duration: int, height: int | None = None) -> float:
     """估算压缩后体积，给确认提示用（只是提示值，实际以转码结果为准）。"""
     if duration <= 0:
         return 0.0
     h = quality_of(height or HEIGHT)
     est = QUALITY_KBPS[h] * duration / 8 / 1024
-    return round(min(QUALITY_MAX_MB[h], est), 1)
+    return round(min(max_mb_for(h, duration), est), 1)
 
 
 def _ffmpeg() -> str:
@@ -177,7 +193,6 @@ async def render(meta: dict, height: int | None = None,
     height: 目标高度（360/480/720/1080），None 用默认 HEIGHT。
     """
     h = quality_of(height or HEIGHT)
-    max_mb = QUALITY_MAX_MB[h]
     qn = QUALITY_QN[h]
     async with _lock:
         TMP_DIR.mkdir(parents=True, exist_ok=True)
@@ -188,10 +203,12 @@ async def render(meta: dict, height: int | None = None,
             video, audio, duration = pick_streams(play, h)
             actual_h = _short_side(video) if video else 0
             dur = duration or int(meta.get("duration") or 0)
+            max_mb = max_mb_for(h, dur)
             combos, maps = _candidates(play, video, audio)
 
             out = tmp / "out.mp4"
-            vbr = max(150, int(max_mb * 8 * 1024 / dur) - 64) if dur > 0 else 400
+            vbr = (max(MIN_VBR, int(max_mb * 8 * 1024 / dur) - AUDIO_KBPS)
+                   if dur > 0 else 400)
             # 横屏：高 480（约 854x480）；竖屏：宽约 270（270x480）
             vf = (f"scale=w={h * 2}:h={h}:force_original_aspect_ratio=decrease,"
                   f"scale=trunc(iw/2)*2:trunc(ih/2)*2")
@@ -204,7 +221,7 @@ async def render(meta: dict, height: int | None = None,
                     "-vf", vf,
                     "-c:v", "libx264", "-preset", "veryfast",
                     "-crf", str(CRF), "-maxrate", f"{vbr}k", "-bufsize", f"{vbr * 2}k",
-                    "-c:a", "aac", "-b:a", "64k", "-ac", "2",
+                    "-c:a", "aac", "-b:a", f"{AUDIO_KBPS}k", "-ac", "2",
                     "-movflags", "+faststart",
                     str(out),
                 ]
