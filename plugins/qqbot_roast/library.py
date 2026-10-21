@@ -150,5 +150,13 @@ def all_triggers() -> list[str]:
     return sorted(_load().keys(), key=len, reverse=True)
 
 
+def triggers_containing(image: bytes) -> list[str]:
+    """反查这张图（按内容哈希命名）已经挂在哪些触发词下。"""
+    digest = hashlib.sha1(image).hexdigest()
+    name = f"{digest[:16]}{_sniff_ext(image)}"
+    data = _load()
+    return [trigger for trigger, files in data.items() if name in files]
+
+
 def memes_for(trigger: str) -> list[str]:
     return list(_load().get(trigger.strip()) or [])

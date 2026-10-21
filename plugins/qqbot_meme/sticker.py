@@ -21,6 +21,9 @@ random_cmd = on_command("表情", aliases={"发表情"}, priority=5, block=True)
 list_cmd = on_command("表情列表", aliases={"列表表情"}, priority=5, block=True)
 add_cmd = on_command("表情添加", aliases={"添加表情"}, priority=5, block=True)
 del_cmd = on_command("表情删除", aliases={"删除表情"}, priority=5, block=True)
+force_add_cmd = on_command(
+    "表情强制添加", aliases={"强制添加表情"}, priority=5, block=True
+)
 
 # 最近图片缓存：发图后 10 分钟内可直接 /表情添加，无需引用
 IMAGE_CACHE_TTL = 600
@@ -45,11 +48,18 @@ def _recent_image(user_id: str) -> str:
 
 
 def _image_url_from_message(message: Message) -> str:
+    """取图片段的地址。
+
+    OneBot v11 的图片段可能把地址放在 ``url`` 或 ``file`` 里，也可能是
+    ``base64://`` 内联数据，三种都要认。
+    """
     for seg in message:
-        if seg.type in ("image", "mface"):
-            url = str(seg.data.get("url") or "")
-            if url.startswith("http"):
-                return url
+        if seg.type not in ("image", "mface"):
+            continue
+        for key in ("url", "file"):
+            value = str(seg.data.get(key) or "")
+            if value.startswith(("http://", "https://", "base64://", "file://")):
+                return value
     return ""
 
 
@@ -80,6 +90,20 @@ async def _reply_image_url(bot: Bot, event: MessageEvent) -> str:
 
 
 async def _download(url: str) -> bytes | None:
+    if url.startswith("base64://"):
+        import base64
+
+        try:
+            return base64.b64decode(url[len("base64://") :])
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"[qqbot_meme] 解码 base64 图片失败: {e}")
+            return None
+    if url.startswith("file://"):
+        try:
+            return Path(url[len("file://") :]).read_bytes()
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"[qqbot_meme] 读取本地图片失败: {e}")
+            return None
     try:
         async with httpx.AsyncClient(timeout=20, follow_redirects=True) as client:
             resp = await client.get(url, headers={"User-Agent": "Mozilla/5.0"})
@@ -189,6 +213,23 @@ async def handle_add(bot: Bot, event: MessageEvent) -> None:
     if len(data) > max_bytes:
         await add_cmd.finish(f"图片太大了（上限 {plugin_config.qqbot_meme_max_mb}MB）。")
 
+    # 先查重：完全一样 / 只是被重压缩过的同一张图
+    dup = library.find_duplicate(data)
+    if dup is not None:
+        kind, existing = dup
+        total = len(library.list_stickers())
+        if kind == "same":
+            head = f"这张已经在库里了（共 {total} 张）"
+        else:
+            head = f"这张和库里已有的一张几乎一样（共 {total} 张）"
+        msg = Message(MessageSegment.text(head + "\n库里那张是：\n"))
+        try:
+            msg += MessageSegment.image(existing.read_bytes())
+        except Exception:  # noqa: BLE001
+            pass
+        msg += MessageSegment.text("\n确实还要再存一份，就发 /表情强制添加")
+        await add_cmd.finish(msg)
+
     try:
         path, created = library.save_sticker(data)
     except ValueError:
@@ -201,6 +242,40 @@ async def handle_add(bot: Bot, event: MessageEvent) -> None:
             + MessageSegment.image(data)
         )
     await add_cmd.finish(f"这张已经在库里了（共 {total} 张）")
+
+
+# ---------------------------------------------------------------- /表情强制添加
+@force_add_cmd.handle()
+async def handle_force_add(bot: Bot, event: MessageEvent) -> None:
+    """跳过查重，硬塞一张（确认不是重复时用）。"""
+    if not is_admin(bot, event):
+        await force_add_cmd.finish("只有群主/群管或机器人超级用户能添加表情包。")
+
+    url = (
+        _image_url_from_message(event.get_message())
+        or await _reply_image_url(bot, event)
+        or _recent_image(event.get_user_id())
+    )
+    if not url:
+        await force_add_cmd.finish("没找到图片：回复一张图再发 /表情强制添加。")
+
+    data = await _download(url)
+    if data is None:
+        await force_add_cmd.finish("图片下载失败（链接可能已过期），重新发一张再试试。")
+
+    max_bytes = plugin_config.qqbot_meme_max_mb * 1024 * 1024
+    if len(data) > max_bytes:
+        await force_add_cmd.finish(f"图片太大了（上限 {plugin_config.qqbot_meme_max_mb}MB）。")
+
+    try:
+        path, created = library.save_sticker(data)
+    except ValueError:
+        await force_add_cmd.finish("只支持 png / jpg / gif / webp 格式哦。")
+
+    total = len(library.list_stickers())
+    if created:
+        await force_add_cmd.finish(f"✅ 已强制添加，库内共 {total} 张")
+    await force_add_cmd.finish(f"字节完全一致，库里已有同一文件（共 {total} 张）")
 
 
 # ---------------------------------------------------------------- /表情删除

@@ -31,6 +31,9 @@ except Exception:  # pragma: no cover - localstore 缺失时退到当前目录
 
 STICKER_EXTS = frozenset({".png", ".jpg", ".jpeg", ".gif", ".webp"})
 
+# 表情包元数据索引：{文件名: {"sha1": ..., "phash": int, "source": ...}}
+STICKERS_INDEX_NAME = "stickers.json"
+
 # 金句库文件（预留）：JSON 数组，元素可以是字符串，也可以是 {"text": ..., "author": ...}
 QUOTES_FILE_NAME = "quotes.json"
 ESSENCE_SEEN_FILE_NAME = "essence_seen.json"
@@ -59,6 +62,30 @@ def bootstrap() -> None:
 
 
 # ---------------------------------------------------------------- 表情包
+def stickers_index_file() -> Path:
+    return DATA_DIR / STICKERS_INDEX_NAME
+
+
+def load_stickers_index() -> dict[str, dict]:
+    path = stickers_index_file()
+    if not path.is_file():
+        return {}
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"[qqbot_meme] 读取表情索引失败：{e}")
+        return {}
+    return raw if isinstance(raw, dict) else {}
+
+
+def save_stickers_index(index: dict[str, dict]) -> None:
+    path = stickers_index_file()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(index, ensure_ascii=False), encoding="utf-8")
+    tmp.replace(path)
+
+
 def list_stickers() -> list[Path]:
     """按文件名排序列出表情包文件。"""
     directory = stickers_dir()
@@ -98,11 +125,76 @@ def save_sticker(data: bytes) -> tuple[Path, bool]:
         raise ValueError("unsupported image format")
     digest = hashlib.sha1(data).hexdigest()[:16]
     path = stickers_dir() / f"{digest}{ext}"
-    if path.exists():
-        return path, False
-    stickers_dir().mkdir(parents=True, exist_ok=True)
-    path.write_bytes(data)
-    return path, True
+    created = not path.exists()
+    if created:
+        stickers_dir().mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+
+    # 维护索引（便于近似查重）
+    try:
+        from . import dedup
+
+        index = load_stickers_index()
+        entry = index.get(path.name) or {}
+        entry["sha1"] = hashlib.sha1(data).hexdigest()
+        if entry.get("phash") is None:
+            entry["phash"] = dedup.perceptual_hash(data)
+        index[path.name] = entry
+        save_stickers_index(index)
+    except Exception as e:  # noqa: BLE001
+        logger.debug(f"[qqbot_meme] 更新表情索引失败：{e}")
+    return path, created
+
+
+def find_duplicate(data: bytes) -> tuple[str, Path] | None:
+    """检查这张图是否已经在库里。
+
+    返回 ``(命中方式, 已存在的文件)``，命中方式为 ``"same"``（完全一致）
+    或 ``"similar"``（近似重复）；未命中返回 ``None``。
+    """
+    from . import dedup
+
+    new_hash = dedup.content_hash(data)
+    new_phash = dedup.perceptual_hash(data)
+    index = load_stickers_index()
+    files = list_stickers()
+
+    # 1) 完全一致：哈希相同（含旧库里没有索引的文件，现算）
+    for path in files:
+        try:
+            old_bytes = path.read_bytes()
+        except Exception:  # noqa: BLE001
+            continue
+        old_hash = (index.get(path.name) or {}).get("sha1")
+        if old_hash is None:
+            old_hash = dedup.content_hash(old_bytes)
+            entry = index.get(path.name) or {}
+            entry["sha1"] = old_hash
+            index[path.name] = entry
+        if old_hash == new_hash:
+            save_stickers_index(index)
+            return "same", path
+
+    # 2) 近似一致：感知哈希距离足够近
+    if new_phash is not None:
+        best: tuple[int, int, Path] | None = None
+        for path in files:
+            entry = index.get(path.name) or {}
+            phash = entry.get("phash")
+            if phash is None:
+                try:
+                    phash = dedup.perceptual_hash(path.read_bytes())
+                except Exception:  # noqa: BLE001
+                    continue
+                entry["phash"] = phash
+                index[path.name] = entry
+            dist = dedup.distance(new_phash, int(phash))
+            if dist <= dedup.SIMILAR_THRESHOLD and (best is None or dist < best[0]):
+                best = (dist, int(phash), path)
+        save_stickers_index(index)
+        if best is not None:
+            return "similar", best[2]
+    return None
 
 
 def delete_sticker(index: int) -> Path | None:
