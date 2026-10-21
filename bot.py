@@ -40,6 +40,9 @@ nonebot.load_plugin(Path("plugins/qqbot_toolbox"))
 # 4. 本地插件 plugins/qqbot_group：群聊管理（禁言/踢人/全体禁言/撤回/复读）
 nonebot.load_plugin(Path("plugins/qqbot_group"))
 
+# 吐槽插件：/骂（默认关闭，按群开关）
+nonebot.load_plugin(Path("plugins/qqbot_roast"))
+
 # 5. 本地插件 plugins/qqbot_meme：表情包管理（戳一戳随机回图 + 金句库）
 nonebot.load_plugin(Path("plugins/qqbot_meme"))
 # B站视频解析：GreaterLG70/nonebot-plugin-bilibili，vendored 进来是为了避开
