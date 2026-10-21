@@ -195,10 +195,12 @@ docker compose logs -f nonebot
 | `SettingsError: error parsing env var "superusers"` | compose 的 `environment` 传了空串 `SUPERUSERS`，NoneBot 按 JSON 解析失败 | 不用时整行注释掉 |
 | `docker compose up -d` 显示 Running 但没生效 | 未检测到变更 | `docker compose restart nonebot` |
 
-## 备份
+## 备份与部署规范
 
 服务器每 6 小时自动备份数据与密钥，详见 [docs/OPS_BACKUP.md](docs/OPS_BACKUP.md)。
 手动备份：`cd /srv/qqbot && ./backup.sh`。
+
+改动后的部署/验证/排障规范见 [docs/SKILL_qqbot-deploy.md](docs/SKILL_qqbot-deploy.md)（同内容也装在 DSH 技能目录，全会话生效）。
 
 ## 文档
 
