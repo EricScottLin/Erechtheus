@@ -120,14 +120,27 @@ async def handle_list(event: MessageEvent) -> None:
 
     if files:
         lines.append("────────────")
-        lines.append("本地表情（可用 /表情删除 <序号>）：")
-        for i, p in enumerate(files[:20], 1):
-            lines.append(f"{i}. {p.name}")
-        if len(files) > 20:
-            lines.append(f"…另有 {len(files) - 20} 张未显示")
+        lines.append("本地表情（用 /表情删除 <序号> 删除）：")
+        lines.append("下面逐张预览，每张前面标了序号")
     else:
         lines.append("本地表情库还是空的，管理员可用 /表情添加 投稿。")
-    await list_cmd.finish("\n".join(lines))
+
+    if not files:
+        await list_cmd.finish("\n".join(lines))
+
+    # 总览先发出去，再逐张预览，方便对着图选序号
+    await list_cmd.send("\n".join(lines))
+    for i, p in enumerate(files, 1):
+        try:
+            data = p.read_bytes()
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"[qqbot_meme] 读取表情 {p.name} 失败：{e}")
+            await list_cmd.send(f"{i}. {p.name}（读取失败）")
+            continue
+        await list_cmd.send(
+            Message(MessageSegment.text(f"{i}.")) + MessageSegment.image(data)
+        )
+    await list_cmd.finish("预览完啦～删除哪张就发：/表情删除 <序号>")
 
 
 # ---------------------------------------------------------------- /表情添加
@@ -183,7 +196,11 @@ async def handle_delete(
 
     text = arg.extract_plain_text().strip()
     if not text.isdigit():
-        await del_cmd.finish("用法：/表情删除 <序号>，序号见 /表情列表")
+        files = library.list_stickers()
+        tip = f"共 {len(files)} 张" if files else "本地表情库是空的"
+        await del_cmd.finish(
+            f"用法：/表情删除 <序号>（{tip}），先发 /表情列表 逐张看预览"
+        )
 
     path = library.delete_sticker(int(text) - 1)
     if path is None:
