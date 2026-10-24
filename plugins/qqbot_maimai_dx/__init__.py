@@ -26,14 +26,16 @@ from nonebot import get_driver, get_plugin_config, on_message
 from nonebot.adapters.onebot.v11 import (
     Bot,
     GroupMessageEvent,
+    Message,
     MessageEvent,
+    MessageSegment,
     PrivateMessageEvent,
 )
 from nonebot.log import logger
 from nonebot.plugin import PluginMetadata
 from nonebot.rule import Rule
 
-from . import image, prices, qr, scorecard
+from . import card, image, prices, qr, scorecard
 from .config import Config
 
 __plugin_meta__ = PluginMetadata(
@@ -270,9 +272,18 @@ async def _run_group(matcher, bot: Bot, event: MessageEvent, name: str, text: st
         charged, cost, after = await prices.charge(uid, name)
         extra = prices.cost_line(cost, after) if charged else f"💸 扣费失败，本次未收费（余额 {after}）"
     if name == "更新成绩" and reply.ok:
-        # 上游成功文案在教用户发「确认上传」；该功能已移除，换成我们自己的单行摘要
-        count = (reply.data or {}).get("count")
-        text = "📥 已读取最新成绩并登出" + (f"，共 {count} 条" if count is not None else "")
+        # 上游成功文案在教用户发「确认上传」；该功能已移除，换成我们自己的摘要 + 成绩图
+        data = reply.data or {}
+        count = data.get("count")
+        scores = (data.get("payload") or {}).get("scores") or []
+        png = card.render(scores, count=count, simulated=reply.simulated)
+        if png:
+            await matcher.send(MessageSegment.image(png))
+            text = f"共 {count} 条" if count is not None else "已读取最新成绩"
+            if reply.simulated:
+                text += "（演示数据，未连接游戏）"
+        else:
+            text = "📥 已读取最新成绩并登出" + (f"，共 {count} 条" if count is not None else "")
         await matcher.finish(text + ("\n" + extra if extra else ""))
     await _deliver(matcher, bot, event, reply, extra)
 
