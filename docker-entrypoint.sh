@@ -26,6 +26,10 @@ try:
 except Exception:
     missing.append("pycryptodome")
 try:
+    import zxingcpp  # noqa: F401  （舞萌绑定：二维码图片解码）
+except Exception:
+    missing.append("zxing-cpp")
+try:
     import maimai_chn  # noqa: F401  （舞萌直连：vendor/MaimaiDXCHN 只读挂载）
     import maimai_chn.chat  # noqa: F401  （ChatBridge 在 0.4.0 之后的分支上）
 except Exception as exc:
@@ -37,7 +41,7 @@ if missing:
 PY
 
 if [ -n "$need_install" ]; then
-    pip install --no-cache-dir "pillow<13" nonebot-plugin-nbnhhsh platformdirs ddgs "pycryptodome>=3.20,<4"
+    pip install --no-cache-dir "pillow<13" nonebot-plugin-nbnhhsh platformdirs ddgs "pycryptodome>=3.20,<4" zxing-cpp
 fi
 
 exec "$@"
