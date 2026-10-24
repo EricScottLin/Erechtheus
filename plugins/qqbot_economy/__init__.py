@@ -128,6 +128,7 @@ async def handle_sign(event: MessageEvent) -> None:
         user["sign_streak"] + 1 if user["last_sign_in"] == _yesterday_str() else 1
     )
     kleos = cur.kleos_for_sign_in(streak)
+    base_kleos = kleos  # 倍率前的基础值，展示用
     mult_info = today_multiplier(uid)
     if mult_info["mult"] > 1:
         kleos = int(round(kleos * mult_info["mult"]))
@@ -178,18 +179,23 @@ async def handle_sign(event: MessageEvent) -> None:
         if streak >= cur.SIGN_STREAK_MAX
         else ""
     )
+    sign_line = f"  获得 {cur.fmt(KLEOS, kleos)}"
+    if mult_info["mult"] > 1:
+        sign_line += f"（基础 {base_kleos} × {mult_info['mult']:g}）"
     lines = [
         "📜 签到成功",
-        f"  获得 {cur.fmt(KLEOS, kleos)}",
+        sign_line,
     ]
     if mult_info.get("dice"):
         d = mult_info["dice"]
         lines.append(
             f"  🖥 {d['label']}：抽到 2^{d['n']} = {d['value']}，"
-            f"{d['fixed']} × {d['value']} = ×{mult_info['mult']:g}"
+            f"{d['fixed']} × {d['value']} = ×{mult_info['mult']:g}（仅荣耀）"
         )
     elif mult_info["mult"] > 1:
-        lines.append(f"  ⚡ {mult_info['name']}加成 ×{mult_info['mult']:g}")
+        lines.append(
+            f"  ⚡ {mult_info['name']}加成 ×{mult_info['mult']:g}（仅荣耀）"
+        )
     if base_drachma > 0:
         lines.append(f"  获得 {cur.fmt(DRACHMA, base_drachma)}")
     lines.extend(bonus_lines)
