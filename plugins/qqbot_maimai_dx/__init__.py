@@ -18,6 +18,7 @@
 """
 
 import asyncio
+import json
 import re
 import time
 from pathlib import Path
@@ -165,9 +166,41 @@ if not _IMPORT_ERROR:
         _START_ERROR = f"{type(exc).__name__}: {exc}"
         logger.error(f"舞萌直连初始化失败：{_START_ERROR}")
 
-# 已绑定身份。绑定与成绩缓存都只在进程内存里（容器重启后需重新绑定），
-# 和 BotController 的会话状态同生命周期，所以这里也用内存集合。
-_BOUND: set[str] = set()
+def _bindings_file() -> Path:
+    try:
+        from nonebot_plugin_localstore import get_plugin_data_dir
+
+        base = get_plugin_data_dir()
+    except Exception:  # pragma: no cover - localstore 缺失时退到 cwd
+        base = Path.cwd() / "data" / "qqbot_maimai_dx"
+    base.mkdir(parents=True, exist_ok=True)
+    return base / "bindings.json"
+
+
+def _load_bindings() -> dict:
+    """identity → 游戏 userId。落盘是为了「一个 QQ 只能绑一个号」跨重启也成立。"""
+    try:
+        data = json.loads(_bindings_file().read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    result = {}
+    for key, value in (data or {}).items():
+        try:
+            result[str(key)] = int(value)
+        except (TypeError, ValueError):
+            continue
+    return result
+
+
+def _save_bindings() -> None:
+    try:
+        _bindings_file().write_text(json.dumps(_BOUND, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception as exc:  # pragma: no cover - 磁盘异常
+        logger.warning(f"舞萌绑定表写入失败：{type(exc).__name__}")
+
+
+# identity → 已绑定的游戏 userId。绑定表落盘，成绩缓存只在内存。
+_BOUND: dict = _load_bindings()
 
 
 def _ready_text() -> str:
@@ -386,8 +419,7 @@ async def _do_bind(bot: Bot, event: MessageEvent, qr_text: str, matcher) -> None
         await matcher.finish("舞萌直连还没就绪：" + _ready_text())
     uid = str(event.user_id)
     identity = _identity(event)
-    if identity in _BOUND:
-        await matcher.finish("这个 QQ 已经绑定过了。要换号或解绑，请找管理员协助。")
+    known = _BOUND.get(identity)
     # 先查群成员，再谈等级：不是本群的人不该知道门槛细节
     if not await _is_group_member(bot, uid):
         await matcher.finish("暂时无法为你开通舞萌直连。")
@@ -399,18 +431,23 @@ async def _do_bind(bot: Bot, event: MessageEvent, qr_text: str, matcher) -> None
             f"{(plugin_config.maimai_dx_bind_min_level - 1) * 100} 荣耀），你现在 Lv.{level}。\n"
             "提示：Lv.9 是第一个觉醒点，要先发 /升阶 才能继续升级。"
         )
-    cost, balance = await prices.quote(uid, "绑定")
-    if cost > balance:
+    # 首次绑定收费；同一个号重新登录（换新二维码）不收费
+    cost, balance = await prices.quote(uid, "绑定") if known is None else (0, 0)
+    if known is None and cost > balance:
         await matcher.finish(f"月币不够：绑定要 {cost} 月币，现在只有 {balance}。")
-    reply = await bridge.handle(_chat_event(event, "绑定 " + qr_text, private=True))
+    reply = await asyncio.to_thread(bridge.controller.bind, identity, qr_text, expect_user_id=known)
     if reply is None:
         return
     if not reply.ok:
+        if reply.kind == "account_mismatch":
+            await matcher.finish("这个二维码是另一个舞萌号。一个 QQ 只能绑一个号，换号请先让管理员解绑。")
         # 技术细节只进日志，聊天里只说"失败"，不披露机台/签名这类信息
         logger.warning(f"舞萌绑定失败：{reply.text}")
         await matcher.finish("绑定没成功。重新生成一张二维码再发我；连续失败请联系管理员。")
-    _BOUND.add(identity)
-    charged, cost, after = await prices.charge(uid, "绑定")
+    info = bridge.controller.binding(identity)
+    _BOUND[identity] = int(info.get("user_id") or 0)
+    _save_bindings()
+    charged, cost, after = await prices.charge(uid, "绑定") if known is None else (True, 0, 0)
     try:
         await bot.delete_msg(message_id=event.message_id)  # 尽力撤回二维码原消息
     except Exception:
@@ -419,7 +456,9 @@ async def _do_bind(bot: Bot, event: MessageEvent, qr_text: str, matcher) -> None
     # 单行输出：上游文案里的「获取基础信息」不是我们的指令名，而且换行会被部分客户端
     # 渲染成 <br/>；这里统一用自己的说法。
     tail = f" {extra}" if extra else ""
-    await matcher.finish(f"账号绑定成功，现在可以发「大象信息」看资料，或「更新成绩」读成绩。{tail}")
+    if known is None:
+        await matcher.finish(f"账号绑定成功，现在可以发「大象信息」看资料，或「更新成绩」读成绩。{tail}")
+    await matcher.finish("已重新登录（还是这个号）。" + tail)
 
 
 def _private_image_rule(event: MessageEvent) -> bool:
@@ -518,7 +557,8 @@ async def _unbind(bot: Bot, event: MessageEvent):
             )
     target_identity = bridge.identity(ChatEvent(user_id=target, text="解绑"))
     reply = bridge.controller.handle(target_identity, "解绑")
-    _BOUND.discard(target_identity)
+    _BOUND.pop(target_identity, None)
+    _save_bindings()
     if not reply.ok:
         await unbind_matcher.finish(reply.text)
     suffix = "" if target == uid else f"（解绑对象：{target}）"
