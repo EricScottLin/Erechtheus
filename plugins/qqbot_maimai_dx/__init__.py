@@ -406,10 +406,9 @@ async def _do_bind(bot: Bot, event: MessageEvent, qr_text: str, matcher) -> None
     if reply is None:
         return
     if not reply.ok:
-        # 认证失败分不清「码过期」还是「机台/签名不被接受」，给一句判定提示
-        await matcher.finish(
-            reply.text + " （如果刚生成就发还是这个错，说明机台或认证签名没被接受）"
-        )
+        # 技术细节只进日志，聊天里只说"失败"，不披露机台/签名这类信息
+        logger.warning(f"舞萌绑定失败：{reply.text}")
+        await matcher.finish("绑定没成功。重新生成一张二维码再发我；连续失败请联系管理员。")
     _BOUND.add(identity)
     charged, cost, after = await prices.charge(uid, "绑定")
     try:
