@@ -76,8 +76,6 @@ _FREE_WITHOUT_BIND = {"说明", "我的状态"}
 _GROUP_TEXT = {
     "我的资料": "获取基础信息",
     "更新": "更新成绩",
-    "预览": "成绩预览",
-    "上传": "确认上传",
     "导出": "导出成绩",
     "登出": "登出",
 }
@@ -284,18 +282,14 @@ help_matcher = on_message(rule=_group_rule("说明"), priority=8, block=True)
 @help_matcher.handle()
 async def _help(event: MessageEvent):
     mode = "演示模式（不请求游戏服）" if plugin_config.maimai_dx_mode == "demo" else "真实模式"
-    target = "水鱼" if plugin_config.maimai_dx_provider == "diving-fish" else "落雪"
-    upload = "已开通" if plugin_config.maimai_dx_allow_upload else "未开通"
     rows = [
         ("我的资料", "免费", "读取玩家资料"),
-        ("更新", None, "读最新成绩并生成同步预览（约 1 分钟）"),
-        ("预览", None, "用已有成绩缓存重新生成预览（不重新登录）"),
-        ("上传", None, f"确认上传到{target}（实传{upload}）"),
+        ("更新", None, "读最新成绩（约 1 分钟）"),
         ("导出", None, "导出成绩 JSON 与 CSV"),
         ("登出", "免费", "独立登出并核验远端状态"),
         ("我的状态", "免费", "绑定、荣耀等级、月币与队列"),
     ]
-    lines = [f"🔧 舞萌直连 · {mode} · 同步目标 {target}", "────────────"]
+    lines = [f"🔧 舞萌直连 · {mode}", "────────────"]
     for name, tag, note in rows:
         price = prices.price_of(name)
         tag = tag or (f"{price} 月币" if price > 0 else "免费")
