@@ -67,7 +67,7 @@ except Exception as exc:  # pragma: no cover - 部署缺依赖时的兜底
     _IMPORT_ERROR = f"{type(exc).__name__}: {exc}"
 
 _READ_TIP = "已收到，正在登录、读取并核验登出，通常约 1 分钟；读完在这里发结果。"
-_NEED_BIND = "还没绑定舞萌账号。私聊我发「绑定」并附上二维码图片即可绑定。"
+_NEED_BIND = "还没绑定舞萌账号。私聊我直接发一张舞萌二维码图片就能绑定。"
 _FREE_WITHOUT_BIND = {"说明"}
 
 # 指令名 → 传给 BotController 的指令（帮助/状态/解绑单独处理，不在此表）
@@ -269,6 +269,11 @@ async def _run_group(matcher, bot: Bot, event: MessageEvent, name: str, text: st
     if reply.ok and cost > 0:
         charged, cost, after = await prices.charge(uid, name)
         extra = prices.cost_line(cost, after) if charged else f"💸 扣费失败，本次未收费（余额 {after}）"
+    if name == "更新成绩" and reply.ok:
+        # 上游成功文案在教用户发「确认上传」；该功能已移除，换成我们自己的单行摘要
+        count = (reply.data or {}).get("count")
+        text = "📥 已读取最新成绩并登出" + (f"，共 {count} 条" if count is not None else "")
+        await matcher.finish(text + ("\n" + extra if extra else ""))
     await _deliver(matcher, bot, event, reply, extra)
 
 
@@ -397,8 +402,11 @@ async def _do_bind(bot: Bot, event: MessageEvent, qr_text: str, matcher) -> None
         await bot.delete_msg(message_id=event.message_id)  # 尽力撤回二维码原消息
     except Exception:
         await matcher.send("（这条二维码消息建议你自己撤回）")
-    extra = prices.cost_line(cost, after) if charged else f"💸 扣费失败，本次未收费（余额 {after}）"
-    await matcher.finish(reply.text + "\n" + extra)
+    extra = prices.cost_line(cost, after) if charged else f"扣费失败，本次未收费（余额 {after}）"
+    # 单行输出：上游文案里的「获取基础信息」不是我们的指令名，而且换行会被部分客户端
+    # 渲染成 <br/>；这里统一用自己的说法。
+    tail = f" {extra}" if extra else ""
+    await matcher.finish(f"账号绑定成功，现在可以发「大象信息」看资料，或「更新成绩」读成绩。{tail}")
 
 
 def _private_image_rule(event: MessageEvent) -> bool:
@@ -498,8 +506,10 @@ async def _unbind(bot: Bot, event: MessageEvent):
     target_identity = bridge.identity(ChatEvent(user_id=target, text="解绑"))
     reply = bridge.controller.handle(target_identity, "解绑")
     _BOUND.discard(target_identity)
-    suffix = "" if target == uid else f"\n（解绑对象：{target}）"
-    await unbind_matcher.finish(reply.text + suffix)
+    if not reply.ok:
+        await unbind_matcher.finish(reply.text)
+    suffix = "" if target == uid else f"（解绑对象：{target}）"
+    await unbind_matcher.finish("已解绑，绑定与成绩缓存已清空。" + suffix)
 
 
 # ---------------------------------------------------------------- 其余指令（群内）
