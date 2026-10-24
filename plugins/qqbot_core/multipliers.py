@@ -95,26 +95,23 @@ def for_user(uid: str, d: date | None = None) -> dict[str, Any]:
     """当天倍率，随机倍率日按 uid 单独抽签（同一个人当天固定）。"""
     d = d or date.today()
     info = for_date(d)
-    if not info.get("dice"):
+    spec = info.get("dice")
+    if not spec:
         return info
-    spec = festivals.DICE_DAYS[d.isoformat()[5:]]  # 从规则表取权重，展示值里没有
     n = festivals.roll_n(d.isoformat(), spec["weights"], salt=str(uid))
-    mult = float(spec["fixed"] * 2 ** n)
+    bonus = int(spec["unit"] * 2 ** n)
     info.update(
-        mult=mult,
-        tier=festivals.tier_name(mult),
         note=festivals.DICE_NOTES.get(n, ""),
-        dice={**spec, "n": n, "value": 2 ** n},
+        dice={**spec, "n": n, "value": 2 ** n, "bonus": bonus},
+        drachma_bonus=bonus,
     )
     return info
 
 
 def mult_text(info: dict[str, Any]) -> str:
-    """倍率的展示文案：随机倍率日显示区间，普通日子显示具体值。"""
-    rng = info.get("range")
-    if info.get("dice") and rng:
-        return f"×{rng[0]:g}~×{rng[1]:g}"
-    return f"×{float(info.get('mult', 1)):g}"
+    """倍率的展示文案：随机倍率日标注「+🎲」（当天另抽月币）。"""
+    text = f"×{float(info.get('mult', 1)):g}"
+    return text + "+🎲" if info.get("dice") else text
 
 
 def upcoming(days: int = 60, limit: int = 8) -> list[dict[str, Any]]:

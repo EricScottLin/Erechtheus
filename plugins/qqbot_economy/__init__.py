@@ -80,7 +80,7 @@ def _event_line(ev: dict) -> str:
     days = int(ev.get("days_left", 0))
     day = iso[5:] if iso[:4] == str(date.today().year) else iso
     when = "明天" if days == 1 else f"{days} 天后"
-    mult = ev.get("range") and f"×{ev['range'][0]:g}~×{ev['range'][1]:g}" or f"×{float(ev.get('mult', 1)):g}"
+    mult = f"×{float(ev.get('mult', 1)):g}" + ("+🎲" if ev.get("dice") else "")
     return f"📅 下一个活动：{day} {ev.get('name', '')} {mult}（{when}）"
 
 
@@ -142,6 +142,11 @@ async def handle_sign(event: MessageEvent) -> None:
     else:
         drachma = 0
 
+    # 随机倍率日（1024）：骰子抽到的数直接换成月币，跟荣耀倍率分开
+    dice_bonus = int(mult_info.get("drachma_bonus", 0) or 0)
+    if dice_bonus > 0:
+        drachma += dice_bonus
+
     base_drachma = drachma  # 基础发放（展示用，奖励单独列）
     # 每日首签奖励（全局第一个签到的人）
     bonus_lines: list[str] = []
@@ -189,8 +194,7 @@ async def handle_sign(event: MessageEvent) -> None:
     if mult_info.get("dice"):
         d = mult_info["dice"]
         lines.append(
-            f"  🖥 {d['label']}：抽到 2^{d['n']} = {d['value']}，"
-            f"{d['fixed']} × {d['value']} = ×{mult_info['mult']:g}（仅荣耀）"
+            f"  🎲 {d['label']}：抽到 2^{d['n']} = {d['value']} → 月币 +{d['bonus']}"
         )
     elif mult_info["mult"] > 1:
         lines.append(
