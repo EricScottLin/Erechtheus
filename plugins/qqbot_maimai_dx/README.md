@@ -35,6 +35,7 @@
 | 导出 | 10 | 导出 JSON + CSV |
 | 绑定 | 100 | 一次性；另需荣耀 Lv.10 |
 | 登出 | 免费 | 安全阀：退出核验不该收费 |
+| 识图 | 免费 | 成绩结算图 OCR：曲名/难度/达成率/判定，存本地档案 |
 | 解绑 | 免费 | 仅管理员 |
 
 指令名是短词，但匹配是**整条消息精确匹配**（允许一个前导 `/`）：所以「更新 了什么」
@@ -42,6 +43,18 @@
 插件的重名。
 
 改价不用改代码：`.env.prod` 里写 `MAIMAI_DX_PRICES={"更新": 8}`。
+
+## 识图（成绩结算图 → 本地档案）
+
+群里发「识图」+ 结算图原图，本地 OCR（rapidocr，CPU 约 3~5 秒）识别：
+
+- 曲名、难度（BASIC/ADVANCED/EXPERT/MASTER/Re:MASTER）、等级
+- 达成率（取 4 位小数的百分比，忽略「我的最高」）
+- 判定（CRITICAL PERFECT / PERFECT / GREAT / GOOD / MISS）与最大连击
+- 结果存 `data/qqbot_maimai_dx/scores/<QQ>/<时间>.json`
+
+**只读**：不写游戏、不写查分器，也不构造任何数据。斜拍/反光的照片会漏识别个别
+判定数字，缺的字段显示 `?`，不会瞎猜。
 
 ## 绑定与解绑
 
@@ -76,7 +89,8 @@ MAIMAI_DX_PLACE_ID=1403
 
 `maimai-dx-chn` 以 Git submodule 固定在 `vendor/MaimaiDXCHN`，容器里只读挂到
 `/opt/maimai-dx-chn` 并通过 `PYTHONPATH` 导入（私有仓库，不在镜像构建时 pip install）。
-运行时另需 `pycryptodome`（机台加解密）与 `zxing-cpp`（二维码解码），镜像已装，
+运行时另需 `pycryptodome`（机台加解密）、`zxing-cpp`（二维码解码）与
+`rapidocr-onnxruntime`（成绩图 OCR），镜像已装，
 `docker-entrypoint.sh` 会幂等补装。
 
 ## 已知边界

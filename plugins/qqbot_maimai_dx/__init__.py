@@ -17,6 +17,7 @@
 都只按这个字段隐藏插件，因此不会出现在 /help、/菜单、/指令 里。
 """
 
+import asyncio
 import re
 import time
 from pathlib import Path
@@ -32,7 +33,7 @@ from nonebot.log import logger
 from nonebot.plugin import PluginMetadata
 from nonebot.rule import Rule
 
-from . import image, prices, qr
+from . import image, prices, qr, scorecard
 from .config import Config
 
 __plugin_meta__ = PluginMetadata(
@@ -283,6 +284,7 @@ async def _help(event: MessageEvent):
         ("更新", None, "读最新成绩（约 1 分钟）"),
         ("导出", None, "导出成绩 JSON 与 CSV"),
         ("登出", "免费", "独立登出并核验远端状态"),
+        ("识图", "免费", "识别成绩结算图（曲名/难度/达成率/判定）并存本地档案"),
     ]
     lines = [f"🔧 舞萌直连 · {mode}", "────────────"]
     for name, tag, note in rows:
@@ -291,7 +293,7 @@ async def _help(event: MessageEvent):
         lines.append(f"{name} · {tag} · {note}")
     lines += [
         "────────────",
-        f"绑定：私聊发「绑定」+ 二维码图片；需要荣耀 Lv.{plugin_config.maimai_dx_bind_min_level}",
+        f"绑定：私聊直接发二维码图片（自动识别）；需要荣耀 Lv.{plugin_config.maimai_dx_bind_min_level}",
         "解绑：管理员发「解绑 @你」；满级可自助",
         "月币按荣耀等级打折；失败不扣费。",
     ]
@@ -361,52 +363,101 @@ async def _is_group_member(bot: Bot, uid: str) -> bool:
     return False
 
 
-@bind_matcher.handle()
-async def _bind(bot: Bot, event: MessageEvent):
+async def _do_bind(bot: Bot, event: MessageEvent, qr_text: str, matcher) -> None:
+    """绑定流程：文字命令与「私聊直接发图」共用。"""
     bridge = _BRIDGE
     if bridge is None:
-        await bind_matcher.finish("舞萌直连还没就绪：" + _ready_text())
+        await matcher.finish("舞萌直连还没就绪：" + _ready_text())
     uid = str(event.user_id)
     identity = _identity(event)
     if identity in _BOUND:
-        await bind_matcher.finish("这个 QQ 已经绑定过了。要换号或解绑，请找管理员协助。")
+        await matcher.finish("这个 QQ 已经绑定过了。要换号或解绑，请找管理员协助。")
     # 先查群成员，再谈等级：不是本群的人不该知道门槛细节
     if not await _is_group_member(bot, uid):
-        await bind_matcher.finish("暂时无法为你开通舞萌直连。")
+        await matcher.finish("暂时无法为你开通舞萌直连。")
     level = await _level_of(uid)
     if level < plugin_config.maimai_dx_bind_min_level:
         # 等级 = 累计荣耀 // 100 + 1，所以 Lv.N 的门槛是 (N-1)×100 荣耀
-        await bind_matcher.finish(
+        await matcher.finish(
             f"还不够绑定：需要荣耀 Lv.{plugin_config.maimai_dx_bind_min_level}（累计 "
             f"{(plugin_config.maimai_dx_bind_min_level - 1) * 100} 荣耀），你现在 Lv.{level}。\n"
             "提示：Lv.9 是第一个觉醒点，要先发 /升阶 才能继续升级。"
         )
-
-    data = await image.first_image_bytes(event, plugin_config.maimai_dx_qr_max_bytes)
-    if not data:
-        await bind_matcher.finish("请把「绑定」和二维码图片一起发给我（私聊）。")
-    if not qr.AVAILABLE:
-        await bind_matcher.finish("二维码识别组件不可用：" + qr.unavailable_reason())
-    qr_text = qr.decode(data) or ""
-    if not qr_text:
-        await bind_matcher.finish("这张图里没识别到二维码，换一张清晰的原图试试。")
-
     cost, balance = await prices.quote(uid, "绑定")
     if cost > balance:
-        await bind_matcher.finish(f"月币不够：绑定要 {cost} 月币，现在只有 {balance}。")
+        await matcher.finish(f"月币不够：绑定要 {cost} 月币，现在只有 {balance}。")
     reply = await bridge.handle(_chat_event(event, "绑定 " + qr_text, private=True))
     if reply is None:
         return
     if not reply.ok:
-        await bind_matcher.finish(reply.text)
+        await matcher.finish(reply.text)
     _BOUND.add(identity)
     charged, cost, after = await prices.charge(uid, "绑定")
     try:
         await bot.delete_msg(message_id=event.message_id)  # 尽力撤回二维码原消息
     except Exception:
-        await bind_matcher.send("（这条二维码消息建议你自己撤回）")
+        await matcher.send("（这条二维码消息建议你自己撤回）")
     extra = prices.cost_line(cost, after) if charged else f"💸 扣费失败，本次未收费（余额 {after}）"
-    await bind_matcher.finish(reply.text + "\n" + extra)
+    await matcher.finish(reply.text + "\n" + extra)
+
+
+def _private_image_rule(event: MessageEvent) -> bool:
+    return _in_private(event) and image.has_image(event)
+
+
+# 私聊直接发二维码图片就自动绑定（priority 5 抢在 AI 插件前面，图片不进模型）。
+qr_image_matcher = on_message(rule=Rule(_private_image_rule), priority=5, block=True)
+
+
+@qr_image_matcher.handle()
+async def _qr_image(bot: Bot, event: MessageEvent):
+    if not qr.AVAILABLE:
+        await qr_image_matcher.finish("二维码识别组件不可用：" + qr.unavailable_reason())
+    data = await image.first_image_bytes(event, plugin_config.maimai_dx_qr_max_bytes)
+    qr_text = qr.decode(data) if data else ""
+    if not qr_text:
+        await qr_image_matcher.finish(
+            "这张图里没识别到二维码。要绑定的话，直接把舞萌小程序里的二维码原图发我。"
+        )
+    await _do_bind(bot, event, qr_text, qr_image_matcher)
+
+
+@bind_matcher.handle()
+async def _bind(bot: Bot, event: MessageEvent):
+    """「绑定」文字命令：保留给"先发文字再补图"的情况；带图的会被上面的自动识别接走。"""
+    data = await image.first_image_bytes(event, plugin_config.maimai_dx_qr_max_bytes)
+    if data and qr.AVAILABLE:
+        qr_text = qr.decode(data) or ""
+        if qr_text:
+            await _do_bind(bot, event, qr_text, bind_matcher)
+            return
+    await bind_matcher.finish("直接私聊发一张舞萌二维码图片就行，我会自动识别并绑定。")
+
+
+# ---------------------------------------------------------------- 识图（群内，免费）
+# 只做「读图 → 结构化 → 存本地」，不写游戏、不写查分器。
+score_matcher = on_message(rule=_group_rule("识图"), priority=8, block=True)
+
+
+@score_matcher.handle()
+async def _score(bot: Bot, event: MessageEvent):
+    if not scorecard.AVAILABLE:
+        await score_matcher.finish("成绩图识别组件不可用：" + scorecard.unavailable_reason())
+    data = await image.first_image_bytes(event, plugin_config.maimai_dx_qr_max_bytes)
+    if not data:
+        await score_matcher.finish("把成绩结算图和「识图」发在同一条消息里（原图，别截屏压缩）。")
+    try:
+        items = await asyncio.to_thread(scorecard.ocr, data)
+    except Exception:
+        await score_matcher.finish("这张图识别失败，换一张正对屏幕的原图试试。")
+    result = scorecard.parse(items)
+    text = scorecard.summary(result)
+    try:
+        path = scorecard.archive(str(event.user_id), result)
+        text += f"\n📁 已存本地档案：{path.name}"
+    except Exception as exc:  # pragma: no cover - 磁盘异常
+        logger.warning(f"成绩档案写入失败：{type(exc).__name__}")
+    await score_matcher.finish(text)
 
 
 # ---------------------------------------------------------------- 解绑（管理员）

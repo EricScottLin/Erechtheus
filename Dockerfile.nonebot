@@ -62,6 +62,9 @@ RUN pip install "pillow<13" nonebot-plugin-nbnhhsh ddgs
 RUN pip install "pycryptodome>=3.20,<4"
 # 舞萌绑定要解二维码图片：zxing-cpp 有 manylinux wheel，不需要 libzbar 之类的系统包
 RUN pip install zxing-cpp
+# 舞萌「识图」：成绩结算图 OCR。rapidocr 带 onnxruntime 和内置模型，
+# 本地 CPU 约 3~5 秒/张，不依赖 tesseract/libzbar 等系统包
+RUN pip install rapidocr-onnxruntime
 
 # 本地插件（vendored，随镜像一起构建，改代码后需 rebuild）
 #   plugins/nonebot_plugin_bilibili  B站视频解析（来自 GreaterLG70/nonebot-plugin-bilibili）

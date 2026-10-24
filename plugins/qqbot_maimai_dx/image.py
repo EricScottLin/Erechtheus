@@ -86,6 +86,11 @@ async def _download(url: str, max_bytes: int) -> Optional[bytes]:
     return b"".join(chunks)
 
 
+def has_image(event: MessageEvent) -> bool:
+    """消息里有没有图片段；私聊自动识别二维码时用来做前置判断。"""
+    return bool(_image_segments(event))
+
+
 async def first_image_bytes(event: MessageEvent, max_bytes: int) -> Optional[bytes]:
     """取消息里第一张图片的原始字节；没有图片或读取失败返回 None。"""
     for file, url in _image_segments(event):
