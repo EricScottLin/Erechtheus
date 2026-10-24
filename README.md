@@ -40,7 +40,7 @@ LLBot 的 WebUI(3081) 与 OneBot WS(3001) 由配置文件强制绑定 `127.0.0.1
 | `nonebot_plugin_rollpig_plus` | [Felis2026/nonebot-plugin-rollpig-plus](https://github.com/Felis2026/nonebot-plugin-rollpig-plus) | 今日小猪：每日抽猪、猪圈收藏、烤群友 |
 | `nonebot_plugin_nbnhhsh` | [ByteColtX/nonebot-plugin-nbnhhsh](https://github.com/ByteColtX/nonebot-plugin-nbnhhsh) | 「能不能好好说话」拼音缩写翻译：`/nbnhhsh yyds`、`/好好说话 yyds`、「yyds是啥」；默认出图 |
 | `nonebot_plugin_maimaidx` | [Yuri-YuzuChaN/nonebot-plugin-maimaidx](https://github.com/Yuri-YuzuChaN/nonebot-plugin-maimaidx) | 舞萌 DX 查分器 |
-| `qqbot_maimai_dx` | 自研 + [MaimaiDXCHN](https://github.com/EricScottLin/MaimaiDXCHN)（git submodule） | **舞萌官方服直连**：`绑定`（私聊发二维码图片）/`大象信息`（资料+状态）/`更新`/`导出`/`登出`/`识图`/`解绑`。只在指定群可见（其他群完全静默、不进帮助菜单），未绑定先提示绑定，按月币收费（说明/大象信息免费），绑定需荣耀 Lv.10 |
+| `qqbot_maimai_dx` | 自研 + [MaimaiDXCHN](https://github.com/EricScottLin/MaimaiDXCHN)（git submodule） | **舞萌官方服直连**：`绑定`（私聊发二维码图片）/`大象信息`（资料+状态）/`更新成绩`/`导出`/`登出`/`识图`/`解绑`。只在指定群可见（其他群完全静默、不进帮助菜单），未绑定先提示绑定，按月币收费（说明/大象信息免费），绑定需荣耀 Lv.10 |
 
 > **为什么舞萌直连另起一条线**：`nonebot_plugin_maimaidx` 走水鱼/落雪查分器（第三方归档），
 > 只能看到别人上传过的成绩；`qqbot_maimai_dx` 直连官方服机台协议，能读官方资料/成绩、

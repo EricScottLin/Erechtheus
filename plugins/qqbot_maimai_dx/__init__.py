@@ -42,7 +42,7 @@ __plugin_meta__ = PluginMetadata(
     usage="""\
 说明            看这份说明与当前模式（免费）
 大象信息        玩家资料 + 本地状态（免费）
-更新            读取最新成绩（约 1 分钟）
+更新成绩        读取最新成绩（约 1 分钟）
 导出            导出成绩 JSON 与 CSV
 登出            独立登出并核验远端状态
 绑定            私聊：发送「绑定」并附二维码图片""",
@@ -72,7 +72,7 @@ _FREE_WITHOUT_BIND = {"说明"}
 
 # 指令名 → 传给 BotController 的指令（帮助/状态/解绑单独处理，不在此表）
 _GROUP_TEXT = {
-    "更新": "更新成绩",
+    "更新成绩": "更新成绩",
     "导出": "导出成绩",
     "登出": "登出",
 }
@@ -281,7 +281,7 @@ async def _help(event: MessageEvent):
     mode = "演示模式（不请求游戏服）" if plugin_config.maimai_dx_mode == "demo" else "真实模式"
     rows = [
         ("大象信息", "免费", "玩家资料 + 本地状态（绑定/荣耀/月币/队列）"),
-        ("更新", None, "读最新成绩（约 1 分钟）"),
+        ("更新成绩", None, "读最新成绩（约 1 分钟）"),
         ("导出", None, "导出成绩 JSON 与 CSV"),
         ("登出", "免费", "独立登出并核验远端状态"),
         ("识图", "免费", "识别成绩结算图（曲名/难度/达成率/判定）并存本地档案"),
@@ -508,7 +508,7 @@ _read_announce = _READ_TIP if plugin_config.maimai_dx_mode == "real" else None
 
 def _register(name: str):
     matcher = on_message(rule=_group_rule(name), priority=8, block=True)
-    announce = _read_announce if name in ("更新", "登出") else None
+    announce = _read_announce if name in ("更新成绩", "登出") else None
 
     @matcher.handle()
     async def _handler(bot: Bot, event: MessageEvent):
