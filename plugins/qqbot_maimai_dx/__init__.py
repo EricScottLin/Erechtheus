@@ -40,11 +40,8 @@ __plugin_meta__ = PluginMetadata(
     description="直连舞萌官方服：资料/成绩读取、查分器同步预览、导出与登出",
     usage="""\
 说明            看这份说明与当前模式（免费）
-我的状态        绑定、荣耀等级、月币与队列状态（免费）
-我的资料        读取玩家资料（免费）
-更新            读取最新成绩并生成同步预览（约 1 分钟）
-预览            用已有成绩缓存重新生成预览
-上传            确认上传到查分器（需开启实传）
+大象信息        玩家资料 + 本地状态（免费）
+更新            读取最新成绩（约 1 分钟）
 导出            导出成绩 JSON 与 CSV
 登出            独立登出并核验远端状态
 绑定            私聊：发送「绑定」并附二维码图片""",
@@ -70,11 +67,10 @@ except Exception as exc:  # pragma: no cover - 部署缺依赖时的兜底
 
 _READ_TIP = "已收到，正在登录、读取并核验登出，通常约 1 分钟；读完在这里发结果。"
 _NEED_BIND = "还没绑定舞萌账号。私聊我发「绑定」并附上二维码图片即可绑定。"
-_FREE_WITHOUT_BIND = {"说明", "我的状态"}
+_FREE_WITHOUT_BIND = {"说明"}
 
 # 指令名 → 传给 BotController 的指令（帮助/状态/解绑单独处理，不在此表）
 _GROUP_TEXT = {
-    "我的资料": "获取基础信息",
     "更新": "更新成绩",
     "导出": "导出成绩",
     "登出": "登出",
@@ -283,11 +279,10 @@ help_matcher = on_message(rule=_group_rule("说明"), priority=8, block=True)
 async def _help(event: MessageEvent):
     mode = "演示模式（不请求游戏服）" if plugin_config.maimai_dx_mode == "demo" else "真实模式"
     rows = [
-        ("我的资料", "免费", "读取玩家资料"),
+        ("大象信息", "免费", "玩家资料 + 本地状态（绑定/荣耀/月币/队列）"),
         ("更新", None, "读最新成绩（约 1 分钟）"),
         ("导出", None, "导出成绩 JSON 与 CSV"),
         ("登出", "免费", "独立登出并核验远端状态"),
-        ("我的状态", "免费", "绑定、荣耀等级、月币与队列"),
     ]
     lines = [f"🔧 舞萌直连 · {mode}", "────────────"]
     for name, tag, note in rows:
@@ -303,33 +298,45 @@ async def _help(event: MessageEvent):
     await help_matcher.finish("\n".join(lines))
 
 
-# ---------------------------------------------------------------- 我的状态（群内，免费）
-status_matcher = on_message(rule=_group_rule("我的状态"), priority=8, block=True)
+# ---------------------------------------------------------------- 大象信息（群内，免费）
+# 「大象」= 舞萌 DX 的 dx（dx 谐音大象），群里的叫法。
+# 一条指令同时给：游戏里的玩家资料（需已绑定）+ 机器人这边的状态（绑定/荣耀/月币/队列）。
+info_matcher = on_message(rule=_group_rule("大象信息"), priority=8, block=True)
 
 
-@status_matcher.handle()
-async def _status(bot: Bot, event: MessageEvent):
+@info_matcher.handle()
+async def _info(bot: Bot, event: MessageEvent):
     bridge = _BRIDGE
     if bridge is None:
-        await status_matcher.finish("舞萌直连还没就绪：" + _ready_text())
+        await info_matcher.finish("舞萌直连还没就绪：" + _ready_text())
     uid = str(event.user_id)
     bound = _is_bound(event)
-    body = ""
-    if bound:
-        reply = await bridge.handle(_chat_event(event, "状态"))
-        if reply is not None:
-            body = reply.text + "\n"
-    stats = bridge.stats()
     level = int(await prices.core.pricing.level_of(uid))
     balance = int(await prices.core.wallet.balance(uid, prices.CURRENCY))
-    summary = (
+    stats = bridge.stats()
+    footer = (
+        f"──── 机器人状态 ────\n"
         f"绑定：{'已绑定' if bound else '未绑定'}\n"
         f"荣耀：Lv.{level}（绑定要求 Lv.{plugin_config.maimai_dx_bind_min_level}）\n"
         f"月币：{balance}\n"
-        f"并发：{stats['active']} 个在查；已处理 {stats['handled']}，"
-        f"重复 {stats['duplicates']}，忙 {stats['busy']}，失败 {stats['failed']}"
+        f"查询中：{stats['active']} 个"
     )
-    await status_matcher.finish(body + summary)
+    if not bound:
+        await info_matcher.finish("还没绑定舞萌账号，下面是本地状态。\n私聊我发「绑定」并附上二维码图片即可绑定。\n" + footer)
+    cost, remain = await prices.quote(uid, "大象信息")
+    if cost > remain:
+        await info_matcher.finish(f"月币不够：这次要 {cost} 月币，现在只有 {remain}。")
+    reply = await bridge.handle(_chat_event(event, "获取基础信息"))
+    if reply is None:
+        return
+    extra = ""
+    if reply.ok and cost > 0:
+        charged, cost, after = await prices.charge(uid, "大象信息")
+        extra = prices.cost_line(cost, after) if charged else f"💸 扣费失败，本次未收费（余额 {after}）"
+    text = (reply.text + "\n" if reply.text else "") + footer
+    if extra:
+        text += "\n" + extra
+    await info_matcher.finish(text)
 
 
 # ---------------------------------------------------------------- 绑定（私聊）

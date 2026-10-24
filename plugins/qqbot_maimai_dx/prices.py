@@ -25,9 +25,8 @@ _OVERRIDES = dict(get_plugin_config(Config).maimai_dx_prices)
 PRICES: dict[str, int] = {
     # 导航类，不收费
     "说明": 0,
-    "我的状态": 0,
     # 只读且不需要写服务器 / 已完成绑定
-    "我的资料": 0,
+    "大象信息": 0,
     "登出": 0,  # 安全阀：退出核验不该收费，否则用户会硬扛着不登出
     # 基础拉数据，最便宜
     "更新": 10,
