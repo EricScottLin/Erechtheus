@@ -73,6 +73,9 @@ services:
       # 注意：适配器只认 ONEBOT_WS_URLS（完整 URL 的 JSON 数组），
       # 不存在 ONEBOT_WS_HOST / ONEBOT_WS_PORT 配置项。
       TZ: ${TZ:-Asia/Shanghai}
+      # 舞萌直连（MaimaiDXCHN）：源码以只读 submodule 挂进容器，用 PYTHONPATH 导入。
+      # 私有仓库不在镜像构建时 pip install，避免把凭据带进镜像层。
+      PYTHONPATH: /opt/maimai-dx-chn
     volumes:
       # 代码热更新：改插件/配置后 docker compose restart nonebot 即可，无需重建镜像
       - ./bot.py:/app/bot.py:ro
@@ -92,3 +95,7 @@ services:
       # 指向 llbot 容器内的 /app/llbot/data/temp，NoneBot 容器本来读不到；
       # 挂进来后插件会按文件名回退到这里读，不依赖 enableLocalFile2Url
       - ${LLBOT_DATA_DIR:-./llbot-data}:/llbot-data:ro
+      # 舞萌直连依赖：MaimaiDXCHN 包源码（git submodule，固定在 verified commit）。
+      # 只读挂载 + PYTHONPATH=/opt/maimai-dx-chn；插件 plugins/qqbot_maimai_dx 用它。
+      # 更新版本：git -C vendor/MaimaiDXCHN checkout <commit> && 提交 gitlink。
+      - ./vendor/MaimaiDXCHN:/opt/maimai-dx-chn:ro

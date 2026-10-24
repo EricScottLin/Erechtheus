@@ -40,6 +40,12 @@ LLBot 的 WebUI(3081) 与 OneBot WS(3001) 由配置文件强制绑定 `127.0.0.1
 | `nonebot_plugin_rollpig_plus` | [Felis2026/nonebot-plugin-rollpig-plus](https://github.com/Felis2026/nonebot-plugin-rollpig-plus) | 今日小猪：每日抽猪、猪圈收藏、烤群友 |
 | `nonebot_plugin_nbnhhsh` | [ByteColtX/nonebot-plugin-nbnhhsh](https://github.com/ByteColtX/nonebot-plugin-nbnhhsh) | 「能不能好好说话」拼音缩写翻译：`/nbnhhsh yyds`、`/好好说话 yyds`、「yyds是啥」；默认出图 |
 | `nonebot_plugin_maimaidx` | [Yuri-YuzuChaN/nonebot-plugin-maimaidx](https://github.com/Yuri-YuzuChaN/nonebot-plugin-maimaidx) | 舞萌 DX 查分器 |
+| `qqbot_maimai_dx` | 自研 + [MaimaiDXCHN](https://github.com/EricScottLin/MaimaiDXCHN)（git submodule） | **舞萌官方服直连**：`舞萌绑定`/`舞萌资料`/`舞萌成绩`/`舞萌预览`/`舞萌上传`/`舞萌导出`/`舞萌状态`/`舞萌登出`/`舞萌解绑`。默认 demo 模式（完全离线），只处理私聊，只对 bot 主与白名单开放 |
+
+> **为什么舞萌直连另起一条线**：`nonebot_plugin_maimaidx` 走水鱼/落雪查分器（第三方归档），
+> 只能看到别人上传过的成绩；`qqbot_maimai_dx` 直连官方服机台协议，能读官方资料/成绩、
+> 生成待确认的查分器同步预览、导出 JSON/CSV 并做登出核验。代价是要用微信「舞萌DX」
+> 小程序的二维码绑定，真实读取一次约 1 分钟。两条线互不影响，可同时开。
 
 > **为什么 bilibili 插件是 vendored 的**：PyPI 上的 `nonebot-plugin-bilibili`
 > 是 `mengbingnaixi` 的「动态订阅」插件，与本文需要的「视频解析」插件**同名不同物**，
@@ -125,6 +131,10 @@ BILI_SESSDATA="SESSDATA=..; bili_jct=..; DedeUserID=.."          # 整段 Cookie
 ## 快速开始
 
 ```bash
+# 0. 拉代码（舞萌直连的 SDK 是 submodule，必须一起拉）
+git clone --recursive git@github.com:EricScottLin/Erechtheus.git
+# 已有仓库更新时：git submodule update --init --recursive
+
 # 1. 配置（.env 与 .env.prod 含密钥，已 gitignore，按模板填写）
 cp .env.example .env
 cp .env.prod.example .env.prod
@@ -152,6 +162,8 @@ docker compose logs -f nonebot
 ├── .env.example               # 环境变量模板（LLBot 侧）
 ├── .env.prod.example          # 环境变量模板（NoneBot 侧）
 ├── plugins/                   # 本地/vendored 插件
+├── vendor/
+│   └── MaimaiDXCHN/           # git submodule：舞萌直连的 SDK（只读挂到 /opt/maimai-dx-chn）
 ├── scripts/
 │   ├── gen-llbot-config.sh    # 生成 LLBot OB11 配置（绑定回环+token）
 │   └── verify-plugins.py      # 宿主机 venv 验证插件加载

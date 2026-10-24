@@ -57,6 +57,9 @@ RUN pip install nonebot-plugin-picmenu-next
 # 拼音缩写翻译「能不能好好说话」（/nbnhhsh、/好好说话）；依赖 httpx + pillow + platformdirs
 # ddgs：qqbot_ai 的联网搜索工具（同步库，跑在线程里）
 RUN pip install "pillow<13" nonebot-plugin-nbnhhsh ddgs
+# 舞萌直连（plugins/qqbot_maimai_dx + vendor/MaimaiDXCHN）：机台协议加解密需要
+# pycryptodome。源码不进镜像（私有仓库 + 只读挂载），这里只装运行时依赖。
+RUN pip install "pycryptodome>=3.20,<4"
 
 # 本地插件（vendored，随镜像一起构建，改代码后需 rebuild）
 #   plugins/nonebot_plugin_bilibili  B站视频解析（来自 GreaterLG70/nonebot-plugin-bilibili）

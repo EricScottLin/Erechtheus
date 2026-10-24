@@ -21,6 +21,15 @@ try:
     import ddgs  # noqa: F401  （qqbot_ai 联网搜索）
 except Exception:
     missing.append("ddgs")
+try:
+    import Crypto  # noqa: F401  （舞萌直连：机台协议加解密）
+except Exception:
+    missing.append("pycryptodome")
+try:
+    import maimai_chn  # noqa: F401  （舞萌直连：vendor/MaimaiDXCHN 只读挂载）
+    import maimai_chn.chat  # noqa: F401  （ChatBridge 在 0.4.0 之后的分支上）
+except Exception as exc:
+    print(f"[entrypoint] maimai_chn 不可用：{type(exc).__name__}: {exc}")
 
 if missing:
     print(f"[entrypoint] 缺少依赖：{missing}")
@@ -28,7 +37,7 @@ if missing:
 PY
 
 if [ -n "$need_install" ]; then
-    pip install --no-cache-dir "pillow<13" nonebot-plugin-nbnhhsh platformdirs ddgs
+    pip install --no-cache-dir "pillow<13" nonebot-plugin-nbnhhsh platformdirs ddgs "pycryptodome>=3.20,<4"
 fi
 
 exec "$@"

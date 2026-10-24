@@ -77,5 +77,10 @@ nonebot.load_plugin(Path("plugins/qqbot_pigverse"))
 # AI 问答：喊「小e <问题>」提问，可联网搜索、可看图（qqbot_ai）
 nonebot.load_plugin(Path("plugins/qqbot_ai"))
 
+# 舞萌DX直连：官方服资料/成绩读取 + 查分器同步预览（MaimaiDXCHN 的 BotController
+# + ChatBridge）。源码来自 vendor/MaimaiDXCHN（只读挂载 /opt/maimai-dx-chn +
+# PYTHONPATH）。默认 demo 模式，不请求游戏服；只处理私聊，只对 bot 主与白名单开放。
+nonebot.load_plugin(Path("plugins/qqbot_maimai_dx"))
+
 # 5. 启动
 nonebot.run()

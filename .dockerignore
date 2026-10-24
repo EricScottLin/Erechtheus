@@ -1,0 +1,20 @@
+# 构建上下文白名单式瘦身：Dockerfile 只 COPY 这些路径——
+#   pyproject.toml / bot.py / .env.prod / docker-entrypoint.sh / plugins/
+# 其余大目录（静态资源、运行数据、备份、submodule）都不该进 docker build 上下文。
+# 注意：不要忽略 .env.prod —— Dockerfile 里有 COPY .env.prod（compose 运行时还会覆盖挂载）。
+.git
+.venv
+__pycache__
+*.pyc
+data
+llbot-data
+backups
+cache
+maimaidx-static
+static-src
+vendor
+docs
+legacy
+scripts
+test_*.py
+*.bak.*

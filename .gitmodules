@@ -1,0 +1,3 @@
+[submodule "vendor/MaimaiDXCHN"]
+	path = vendor/MaimaiDXCHN
+	url = git@github.com:EricScottLin/MaimaiDXCHN.git
