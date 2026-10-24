@@ -99,8 +99,11 @@ def for_user(uid: str, d: date | None = None) -> dict[str, Any]:
     if not spec:
         return info
     n = festivals.roll_n(d.isoformat(), spec["weights"], salt=str(uid))
-    bonus = int(spec["unit"] * 2 ** n)
+    mult = float(spec["fixed"] * 2 ** n)          # 荣耀跟着骰子放大
+    bonus = int(spec["unit"] * 2 ** n)            # 月币奖励同一倍数
     info.update(
+        mult=mult,
+        tier=festivals.tier_name(mult),
         note=festivals.DICE_NOTES.get(n, ""),
         dice={**spec, "n": n, "value": 2 ** n, "bonus": bonus},
         drachma_bonus=bonus,
@@ -109,9 +112,15 @@ def for_user(uid: str, d: date | None = None) -> dict[str, Any]:
 
 
 def mult_text(info: dict[str, Any]) -> str:
-    """倍率的展示文案：随机倍率日标注「+🎲」（当天另抽月币）。"""
-    text = f"×{float(info.get('mult', 1)):g}"
-    return text + "+🎲" if info.get("dice") else text
+    """倍率的展示文案：随机倍率日标「+🎲」；没抽签时显示区间。"""
+    d = info.get("dice")
+    if not d:
+        return f"×{float(info.get('mult', 1)):g}"
+    if d.get("n"):
+        return f"×{float(info['mult']):g}+🎲"
+    lo = d["fixed"] * 2 ** min(d["weights"])
+    hi = d["fixed"] * 2 ** max(d["weights"])
+    return f"×{lo:g}~×{hi:g}+🎲"
 
 
 def upcoming(days: int = 60, limit: int = 8) -> list[dict[str, Any]]:

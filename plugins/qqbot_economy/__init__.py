@@ -194,7 +194,8 @@ async def handle_sign(event: MessageEvent) -> None:
     if mult_info.get("dice"):
         d = mult_info["dice"]
         lines.append(
-            f"  🎲 {d['label']}：抽到 2^{d['n']} = {d['value']} → 月币 +{d['bonus']}"
+            f"  🎲 {d['label']}：抽到 2^{d['n']} = {d['value']} → "
+            f"荣耀 ×{mult_info['mult']:g} · 月币 +{d['bonus']}"
         )
     elif mult_info["mult"] > 1:
         lines.append(

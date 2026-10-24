@@ -272,12 +272,13 @@ async def _(bot: Bot, event: MessageEvent, arg: Message = CommandArg()):
         info = multipliers.for_user(str(event.get_user_id()))
         name = f"（{info['name']}）" if info["name"] else "（无加成）"
         if info.get("dice"):
-            name = name[:-1] + "，另抽月币）" if info["name"] else "（另抽月币）"
+            name = name[:-1] + "，抽奖加倍）" if info["name"] else "（抽奖加倍）"
         lines = [f"⚡ 今日荣耀倍率：×{info['mult']:g}{name}"]
         if info.get("dice"):
             d = info["dice"]
             lines.append(
-                f"  🎲 {d['label']}：抽到 2^{d['n']} = {d['value']} → 月币 +{d['bonus']}"
+                f"  🎲 {d['label']}：抽到 2^{d['n']} = {d['value']} → "
+                f"荣耀 ×{info['mult']:g} · 月币 +{d['bonus']}"
             )
         if info.get("note"):
             lines.append(f"  💡 {info['note']}")

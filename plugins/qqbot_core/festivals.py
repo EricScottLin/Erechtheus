@@ -400,11 +400,13 @@ def calendar(year: int) -> dict[str, dict]:
             "note": notes[0] if notes else "",
         }
         spec = DICE_DAYS.get(iso[5:])  # 按 MM-DD 匹配
-        if spec:  # 随机倍率日：荣耀固定 ×fixed，骰子改成抽月币
+        if spec:  # 随机倍率日：荣耀和月币一起吃骰子
+            n = roll_n(iso, spec["weights"])
             unit = spec.get("unit", 5)
+            mult = float(spec["fixed"] * 2 ** n)
             entry.update(
-                mult=float(spec["fixed"]),
-                tier=tier_name(float(spec["fixed"])),
+                mult=mult,
+                tier=tier_name(mult),
                 dice={
                     "label": spec["label"],
                     "fixed": spec["fixed"],
