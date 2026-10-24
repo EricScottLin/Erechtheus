@@ -113,14 +113,19 @@ def ocr(data: bytes) -> list[dict]:
 
 
 def _numbers_near(
-    items: list[dict], label: dict, *, same_row: int = 14, allow_ratio: bool = False
+    items: list[dict],
+    label: dict,
+    *,
+    same_row: int = 14,
+    allow_ratio: bool = False,
+    both_sides: bool = False,
 ) -> list[int]:
     """同一行、标签右侧的数字（按 x 由近到远）。"""
     found = []
     for item in items:
         if item is label or abs(item["y"] - label["y"]) > same_row:
             continue
-        if item["x"] <= label["x"]:
+        if not both_sides and item["x"] <= label["x"]:
             continue
         if not allow_ratio and (
             "/" in item["text"]
@@ -222,20 +227,31 @@ def parse(items: list[dict]) -> dict:
                     combo, total_notes = numbers[0], numbers[1]
                     break
 
+    # DX 分数：同排含「/」的文本框，取离标签最近的那个（数字在标签左边）
     dx_score = None
     dx_label = _find_label(items, ("DX分数", "DXSCORE"))
     if dx_label:
-        numbers = _numbers_near(items, dx_label, same_row=60, allow_ratio=True)
-        if len(numbers) >= 2 and numbers[0] <= numbers[1]:
-            dx_score = (numbers[0], numbers[1])
+        best = None
+        for item in items:
+            if "/" not in item["text"] or abs(item["y"] - dx_label["y"]) > 40:
+                continue
+            match = _COMBO.search(item["text"].replace(",", ""))
+            if not match:
+                continue
+            left, right = int(match.group(1)), int(match.group(2))
+            if not 0 < left <= right:
+                continue
+            distance = abs(item["x"] - dx_label["x"])
+            if best is None or distance < best[0]:
+                best = (distance, left, right)
+        if best:
+            dx_score = (best[1], best[2])
 
-    # 只做「四项齐全时倒推 miss」这一种推导，缺项就留空（显示 ?），不猜
-    if (
-        total_notes
-        and "miss" not in judgements
-        and all(key in judgements for key in ("critical_perfect", "perfect", "great", "good"))
-    ):
-        judgements["miss"] = max(0, total_notes - sum(judgements.values()))
+    derived = []
+    if total_notes:
+        derived = _solve_judgements(judgements, total_notes, achievement)
+        for key, value in derived.items():
+            judgements.setdefault(key, value)
 
     return {
         "title": title,
@@ -246,12 +262,59 @@ def parse(items: list[dict]) -> dict:
         "combo": combo,
         "total_notes": total_notes,
         "dx_score": dx_score,
+        "derived": sorted(derived),
         "raw": texts,
         "captured_at": time.strftime("%Y-%m-%d %H:%M:%S"),
     }
 
 
 _DIFF_NAMES = {0: "BASIC", 1: "ADVANCED", 2: "EXPERT", 3: "MASTER", 4: "Re:MASTER"}
+
+# 判定权重：PERFECT（含 CRITICAL）1.0、GREAT 0.8、GOOD 0.5、MISS 0；
+# BREAK 全部 CRITICAL 时额外 +1%（所以满达成率是 101%）。
+_WEIGHT = {"critical_perfect": 1.0, "perfect": 1.0, "great": 0.8, "good": 0.5, "miss": 0.0}
+_KEYS = ("critical_perfect", "perfect", "great", "good", "miss")
+
+
+def achievement_of(judgements: dict, total: int, break_bonus: float = 1.0) -> float:
+    """按判定算达成率（%）。break_bonus 是 BREAK 全 CRITICAL 时的额外百分比（0~1）。"""
+    points = sum(_WEIGHT[key] * judgements.get(key, 0) for key in _KEYS)
+    return round(points / total * 100 + break_bonus, 4)
+
+
+def _solve_judgements(known: dict, total: int, achievement) -> dict:
+    """总物量 + 达成率 → 补齐 OCR 漏掉的判定。
+
+    达成率的 BREAK 加成在 0~1% 之间（全 CRITICAL 才是 1%），所以每个候选组合
+    只要算出的达成率落在「基础分 ~ 基础分+1%」区间内就算一致；唯一解才采纳。
+    """
+    missing = [key for key in _KEYS if key not in known]
+    if not missing or achievement is None:
+        return {}
+    remaining = total - sum(known.values())
+    if remaining < 0:
+        return {}
+    candidates = _distribute(missing, remaining)
+    matched = []
+    for combo in candidates:
+        merged = {**known, **combo}
+        low = achievement_of(merged, total, 0.0)
+        high = achievement_of(merged, total, 1.0)
+        if low - 0.02 <= achievement <= high + 0.02:
+            matched.append(combo)
+    return matched[0] if len(matched) == 1 else {}
+
+
+def _distribute(keys: list[str], total: int) -> list[dict]:
+    """把 total 个判定分配给 keys 的所有组合（keys ≤ 2 时规模很小）。"""
+    if not keys:
+        return []
+    if len(keys) == 1:
+        return [{keys[0]: total}]
+    if len(keys) == 2:
+        return [{keys[0]: total - i, keys[1]: i} for i in range(total + 1)]
+    # 三个以上不做穷举，交给 OCR
+    return []
 
 
 def summary(result: dict) -> str:
@@ -266,12 +329,13 @@ def summary(result: dict) -> str:
     lines = [f"🎵 {title}", f"{difficulty} {level if level is not None else '?'}"]
     if achievement is not None:
         lines[-1] += f" · 达成率 {achievement:.4f}%"
+    derived = set(result.get("derived") or ())
     judge_parts = []
     if cp is not None or perfect is not None:
         judge_parts.append(f"Perfect {cp if cp is not None else '?'}+{perfect if perfect is not None else '?'}")
-    for name, value in (("Great", great), ("Good", good), ("Miss", miss)):
+    for name, key, value in (("Great", "great", great), ("Good", "good", good), ("Miss", "miss", miss)):
         if value is not None:
-            judge_parts.append(f"{name} {value}")
+            judge_parts.append(f"{name} {value}" + ("*" if key in derived else ""))
     if judge_parts:
         lines.append(" · ".join(judge_parts))
     extras = []
@@ -283,6 +347,8 @@ def summary(result: dict) -> str:
         extras.append(f"连击 {combo}/{total}")
     if extras:
         lines.append(" · ".join(extras))
+    if derived:
+        lines.append("（* 按总物量 + 达成率推算；达成率含 BREAK 加成 0~1%）")
     if result.get("achievement") is None and not judges:
         lines.append("（这张图没识别出有效成绩，换一张正对屏幕的原图会好很多）")
     return "\n".join(lines)
