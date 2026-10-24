@@ -1,32 +1,34 @@
 """舞萌 DX 直连插件 —— 基于 MaimaiDXCHN 的 BotController + ChatBridge。
 
-可见范围（三层权限，任何一层不满足都不出声）：
+可见范围（三层，任何一层不满足都不出声）：
 
-  1. 群：只有 MAIMAI_DX_GROUP_IDS 里的群可用；其他群完全静默，不回复也不提示。
-  2. 私聊：只有「舞萌绑定」可用；其余指令在私聊里静默（不回「去某群用」，
-     避免暴露有这个群）。
-  3. 绑定：除「舞萌帮助 / 舞萌状态」外都要求先绑定；未绑定统一提示去私聊绑定。
+  1. 群：只有 MAIMAI_DX_GROUP_IDS 里的群可用；其他群 matcher 不匹配，完全静默。
+  2. 私聊：只有「绑定」可用；其余指令在私聊里静默（不回「去某群用」，避免暴露群）。
+  3. 绑定：除「说明 / 我的状态」外都要求先绑定；未绑定统一提示去私聊绑定。
+
+指令名刻意用短词（说明 / 更新 / 上传 / 导出 / 登出 / 绑定 / 解绑 …），但匹配是
+**整条消息精确匹配**（允许一个前导 /），所以「更新 了什么」「绑定 手机号」这类
+日常闲聊不会误触发；这也避开了 /帮助、/状态、/资料 与其他插件的重名。
 
 收费见 prices.py：月币结算，先查余额、成功后扣费、失败不收费。
 绑定门槛：荣耀 Lv.10（累计 900 荣耀；Lv.9 是觉醒点，必须先 /升阶）。
-解绑：仅管理员可用「舞萌解绑 @某人」；满级 Lv.9999 可自助。
+解绑：仅管理员可用「解绑 @某人」；满级 Lv.9999 可自助。
 菜单隐藏：PluginMetadata.type 设为 "library" —— picmenu-next 与 qqbot_toolbox
 都只按这个字段隐藏插件，因此不会出现在 /help、/菜单、/指令 里。
 """
 
+import re
 import time
 from pathlib import Path
 
-from nonebot import get_driver, get_plugin_config, on_command
+from nonebot import get_driver, get_plugin_config, on_message
 from nonebot.adapters.onebot.v11 import (
     Bot,
     GroupMessageEvent,
-    Message,
     MessageEvent,
     PrivateMessageEvent,
 )
 from nonebot.log import logger
-from nonebot.params import CommandArg
 from nonebot.plugin import PluginMetadata
 from nonebot.rule import Rule
 
@@ -37,17 +39,17 @@ __plugin_meta__ = PluginMetadata(
     name="舞萌DX直连",
     description="直连舞萌官方服：资料/成绩读取、查分器同步预览、导出与登出",
     usage="""\
-舞萌帮助            看这份说明与当前模式（免费）
-舞萌状态            绑定、游戏会话与队列状态（免费）
-舞萌资料            读取玩家资料（免费）
-舞萌成绩 <纹章>      读取最新成绩并生成同步预览
-舞萌预览            用已有成绩缓存重新生成预览
-舞萌上传            确认上传到查分器（需开启实传）
-舞萌导出            导出成绩 JSON 与 CSV
-舞萌登出            独立登出并核验远端状态
-舞萌绑定            私聊：发送「舞萌绑定」并附二维码图片""",
+说明            看这份说明与当前模式（免费）
+我的状态        绑定、荣耀等级、月币与队列状态（免费）
+我的资料        读取玩家资料（免费）
+更新            读取最新成绩并生成同步预览（约 1 分钟）
+预览            用已有成绩缓存重新生成预览
+上传            确认上传到查分器（需开启实传）
+导出            导出成绩 JSON 与 CSV
+登出            独立登出并核验远端状态
+绑定            私聊：发送「绑定」并附二维码图片""",
     # type=library 是刻意的：帮助菜单与 /指令 都只按这个字段隐藏插件。
-    # 本插件只在指定群对已授权用户开放，不该出现在公共菜单里。
+    # 本插件只在指定群对已绑定用户开放，不该出现在公共菜单里。
     type="library",
     homepage="https://github.com/EricScottLin/MaimaiDXCHN",
     config=Config,
@@ -67,8 +69,21 @@ except Exception as exc:  # pragma: no cover - 部署缺依赖时的兜底
     _IMPORT_ERROR = f"{type(exc).__name__}: {exc}"
 
 _READ_TIP = "已收到，正在登录、读取并核验登出，通常约 1 分钟；读完在这里发结果。"
-_NEED_BIND = "还没绑定舞萌账号。私聊我发「舞萌绑定」并附上二维码图片即可绑定。"
-_FREE_WITHOUT_BIND = {"舞萌帮助", "舞萌状态"}
+_NEED_BIND = "还没绑定舞萌账号。私聊我发「绑定」并附上二维码图片即可绑定。"
+_FREE_WITHOUT_BIND = {"说明", "我的状态"}
+
+# 指令名 → 传给 BotController 的指令（帮助/状态/解绑单独处理，不在此表）
+_GROUP_TEXT = {
+    "我的资料": "获取基础信息",
+    "更新": "更新成绩",
+    "预览": "成绩预览",
+    "上传": "确认上传",
+    "导出": "导出成绩",
+    "登出": "登出",
+}
+
+# 「解绑」允许带 @某人 或直接跟 QQ 号；@ 在纯文本里不占字符，所以两种写法都能覆盖。
+_UNBIND_RE = re.compile(r"^[/／]?\s*解绑(?:\s+\d{5,12})?\s*$")
 
 
 def _group_ids() -> frozenset[int]:
@@ -82,6 +97,39 @@ def _in_group(event: MessageEvent) -> bool:
 
 def _in_private(event: MessageEvent) -> bool:
     return isinstance(event, PrivateMessageEvent)
+
+
+def _plain(event: MessageEvent) -> str:
+    """消息纯文本（去掉前导 /），用来做「整条消息精确匹配」。
+
+    注意：OneBot v11 的 MessageEvent 没有 get_plain_text()，必须走 get_message()。
+    """
+    try:
+        text = event.get_message().extract_plain_text()
+    except Exception:  # pragma: no cover - 事件结构异常
+        return ""
+    return text.strip().lstrip("/／").strip()
+
+
+def _group_rule(name: str):
+    def checker(event: MessageEvent) -> bool:
+        return _in_group(event) and _plain(event) == name
+
+    return Rule(checker)
+
+
+def _private_rule(name: str):
+    def checker(event: MessageEvent) -> bool:
+        return _in_private(event) and _plain(event) == name
+
+    return Rule(checker)
+
+
+def _unbind_rule():
+    def checker(event: MessageEvent) -> bool:
+        return _in_group(event) and _UNBIND_RE.match(_plain(event)) is not None
+
+    return Rule(checker)
 
 
 def _bot_settings():
@@ -163,8 +211,8 @@ def _export_dir() -> Path:
 def _attach_upload_account(bridge, chat_event):
     """把环境变量里的查分器凭证挂到当前用户；不通过聊天收集密钥。
 
-    必须在下发指令（尤其是「更新成绩」）之前挂好：BotController 一旦发现凭证变化，
-    会清空待确认的同步预览，导致「舞萌上传」无预览可用。
+    必须在下发指令（尤其是「更新」）之前挂好：BotController 一旦发现凭证变化，
+    会清空待确认的同步预览，导致「上传」无预览可用。
     """
     token = plugin_config.maimai_dx_prober_token.strip()
     if not (plugin_config.maimai_dx_allow_upload and token):
@@ -229,18 +277,8 @@ async def _run_group(matcher, bot: Bot, event: MessageEvent, name: str, text: st
     await _deliver(matcher, bot, event, reply, extra)
 
 
-def _simple_command(name: str, text: str, announce: str = None):
-    matcher = on_command(name, rule=Rule(_in_group), priority=8, block=True)
-
-    @matcher.handle()
-    async def _handler(bot: Bot, event: MessageEvent):
-        await _run_group(matcher, bot, event, name, text, announce)
-
-    return matcher
-
-
-# ---------------------------------------------------------------- 帮助（群内，免费）
-help_matcher = on_command("舞萌帮助", rule=Rule(_in_group), priority=8, block=True)
+# ---------------------------------------------------------------- 说明（群内，免费）
+help_matcher = on_message(rule=_group_rule("说明"), priority=8, block=True)
 
 
 @help_matcher.handle()
@@ -249,13 +287,13 @@ async def _help(event: MessageEvent):
     target = "水鱼" if plugin_config.maimai_dx_provider == "diving-fish" else "落雪"
     upload = "已开通" if plugin_config.maimai_dx_allow_upload else "未开通"
     rows = [
-        ("舞萌资料", "免费", "读取玩家资料"),
-        ("舞萌成绩", None, "读取最新成绩并生成同步预览（约 1 分钟）"),
-        ("舞萌预览", None, "用已有成绩缓存重新生成预览"),
-        ("舞萌上传", None, f"确认上传到{target}（实传{upload}）"),
-        ("舞萌导出", None, "导出成绩 JSON 与 CSV"),
-        ("舞萌登出", "免费", "独立登出并核验远端状态"),
-        ("舞萌状态", "免费", "绑定、游戏会话与队列状态"),
+        ("我的资料", "免费", "读取玩家资料"),
+        ("更新", None, "读最新成绩并生成同步预览（约 1 分钟）"),
+        ("预览", None, "用已有成绩缓存重新生成预览（不重新登录）"),
+        ("上传", None, f"确认上传到{target}（实传{upload}）"),
+        ("导出", None, "导出成绩 JSON 与 CSV"),
+        ("登出", "免费", "独立登出并核验远端状态"),
+        ("我的状态", "免费", "绑定、荣耀等级、月币与队列"),
     ]
     lines = [f"🔧 舞萌直连 · {mode} · 同步目标 {target}", "────────────"]
     for name, tag, note in rows:
@@ -264,29 +302,29 @@ async def _help(event: MessageEvent):
         lines.append(f"{name} · {tag} · {note}")
     lines += [
         "────────────",
-        f"绑定：私聊发「舞萌绑定」+ 二维码图片；需要荣耀 Lv.{plugin_config.maimai_dx_bind_min_level}",
-        "解绑：找管理员发「舞萌解绑 @你」；满级可自助",
+        f"绑定：私聊发「绑定」+ 二维码图片；需要荣耀 Lv.{plugin_config.maimai_dx_bind_min_level}",
+        "解绑：管理员发「解绑 @你」；满级可自助",
         "月币按荣耀等级打折；失败不扣费。",
     ]
     await help_matcher.finish("\n".join(lines))
 
 
-# ---------------------------------------------------------------- 状态（群内，免费）
-status = on_command("舞萌状态", rule=Rule(_in_group), priority=8, block=True)
+# ---------------------------------------------------------------- 我的状态（群内，免费）
+status_matcher = on_message(rule=_group_rule("我的状态"), priority=8, block=True)
 
 
-@status.handle()
+@status_matcher.handle()
 async def _status(bot: Bot, event: MessageEvent):
     bridge = _BRIDGE
     if bridge is None:
-        await status.finish("舞萌直连还没就绪：" + _ready_text())
+        await status_matcher.finish("舞萌直连还没就绪：" + _ready_text())
     uid = str(event.user_id)
     bound = _is_bound(event)
+    body = ""
     if bound:
         reply = await bridge.handle(_chat_event(event, "状态"))
-        body = (reply.text + "\n") if reply is not None else ""
-    else:
-        body = ""  # 未绑定时不重复「账号：未绑定」，统一放到下面的摘要里
+        if reply is not None:
+            body = reply.text + "\n"
     stats = bridge.stats()
     level = int(await prices.core.pricing.level_of(uid))
     balance = int(await prices.core.wallet.balance(uid, prices.CURRENCY))
@@ -297,11 +335,11 @@ async def _status(bot: Bot, event: MessageEvent):
         f"并发：{stats['active']} 个在查；已处理 {stats['handled']}，"
         f"重复 {stats['duplicates']}，忙 {stats['busy']}，失败 {stats['failed']}"
     )
-    await status.finish(body + summary)
+    await status_matcher.finish(body + summary)
 
 
 # ---------------------------------------------------------------- 绑定（私聊）
-bind = on_command("舞萌绑定", aliases={"舞萌认证"}, rule=Rule(_in_private), priority=8, block=True)
+bind_matcher = on_message(rule=_private_rule("绑定"), priority=8, block=True)
 
 
 async def _level_of(uid: str) -> int:
@@ -312,7 +350,9 @@ async def _is_group_member(bot: Bot, uid: str) -> bool:
     """绑定前确认本人在允许的群里；机器人不在群里或查不到都按"不是"处理。"""
     for gid in sorted(_group_ids()):
         try:
-            info = await bot.get_group_member_info(group_id=int(gid), user_id=int(uid), no_cache=True)
+            info = await bot.get_group_member_info(
+                group_id=int(gid), user_id=int(uid), no_cache=True
+            )
         except Exception:
             continue
         if info:
@@ -320,62 +360,60 @@ async def _is_group_member(bot: Bot, uid: str) -> bool:
     return False
 
 
-@bind.handle()
-async def _bind(bot: Bot, event: MessageEvent, arg: Message = CommandArg()):
+@bind_matcher.handle()
+async def _bind(bot: Bot, event: MessageEvent):
     bridge = _BRIDGE
     if bridge is None:
-        await bind.finish("舞萌直连还没就绪：" + _ready_text())
+        await bind_matcher.finish("舞萌直连还没就绪：" + _ready_text())
     uid = str(event.user_id)
     identity = _identity(event)
     if identity in _BOUND:
-        await bind.finish("这个 QQ 已经绑定过了。要换号或解绑，请找管理员协助。")
+        await bind_matcher.finish("这个 QQ 已经绑定过了。要换号或解绑，请找管理员协助。")
     # 先查群成员，再谈等级：不是本群的人不该知道门槛细节
     if not await _is_group_member(bot, uid):
-        await bind.finish("暂时无法为你开通舞萌直连。")
+        await bind_matcher.finish("暂时无法为你开通舞萌直连。")
     level = await _level_of(uid)
     if level < plugin_config.maimai_dx_bind_min_level:
         # 等级 = 累计荣耀 // 100 + 1，所以 Lv.N 的门槛是 (N-1)×100 荣耀
-        await bind.finish(
+        await bind_matcher.finish(
             f"还不够绑定：需要荣耀 Lv.{plugin_config.maimai_dx_bind_min_level}（累计 "
             f"{(plugin_config.maimai_dx_bind_min_level - 1) * 100} 荣耀），你现在 Lv.{level}。\n"
             "提示：Lv.9 是第一个觉醒点，要先发 /升阶 才能继续升级。"
         )
 
-    qr_text = arg.extract_plain_text().strip()
+    data = await image.first_image_bytes(event, plugin_config.maimai_dx_qr_max_bytes)
+    if not data:
+        await bind_matcher.finish("请把「绑定」和二维码图片一起发给我（私聊）。")
+    if not qr.AVAILABLE:
+        await bind_matcher.finish("二维码识别组件不可用：" + qr.unavailable_reason())
+    qr_text = qr.decode(data) or ""
     if not qr_text:
-        data = await image.first_image_bytes(event, plugin_config.maimai_dx_qr_max_bytes)
-        if not data:
-            await bind.finish("请把「舞萌绑定」和二维码图片一起发给我（私聊）。")
-        if not qr.AVAILABLE:
-            await bind.finish("二维码识别组件不可用：" + qr.unavailable_reason())
-        qr_text = qr.decode(data) or ""
-        if not qr_text:
-            await bind.finish("这张图里没识别到二维码，换一张清晰的原图试试。")
+        await bind_matcher.finish("这张图里没识别到二维码，换一张清晰的原图试试。")
 
-    cost, balance = await prices.quote(uid, "舞萌绑定")
+    cost, balance = await prices.quote(uid, "绑定")
     if cost > balance:
-        await bind.finish(f"月币不够：绑定要 {cost} 月币，现在只有 {balance}。")
+        await bind_matcher.finish(f"月币不够：绑定要 {cost} 月币，现在只有 {balance}。")
     reply = await bridge.handle(_chat_event(event, "绑定 " + qr_text, private=True))
     if reply is None:
         return
     if not reply.ok:
-        await bind.finish(reply.text)
+        await bind_matcher.finish(reply.text)
     _BOUND.add(identity)
-    charged, cost, after = await prices.charge(uid, "舞萌绑定")
+    charged, cost, after = await prices.charge(uid, "绑定")
     try:
         await bot.delete_msg(message_id=event.message_id)  # 尽力撤回二维码原消息
     except Exception:
-        await bind.send("（这条二维码消息建议你自己撤回）")
+        await bind_matcher.send("（这条二维码消息建议你自己撤回）")
     extra = prices.cost_line(cost, after) if charged else f"💸 扣费失败，本次未收费（余额 {after}）"
-    await bind.finish(reply.text + "\n" + extra)
+    await bind_matcher.finish(reply.text + "\n" + extra)
 
 
 # ---------------------------------------------------------------- 解绑（管理员）
-unbind = on_command("舞萌解绑", rule=Rule(_in_group), priority=8, block=True)
+unbind_matcher = on_message(rule=_unbind_rule(), priority=8, block=True)
 
 
-def _mentioned(event: MessageEvent, arg: Message) -> str:
-    """取要解绑的 QQ：优先 @某人，其次直接写号码。"""
+def _mentioned(event: MessageEvent) -> str:
+    """取要解绑的 QQ：优先 @某人，其次消息末尾直接写号码。"""
     try:
         for segment in event.get_message():
             if segment.type == "at":
@@ -384,24 +422,24 @@ def _mentioned(event: MessageEvent, arg: Message) -> str:
                     return qq
     except Exception:  # pragma: no cover - 事件结构异常
         pass
-    text = arg.extract_plain_text().strip()
-    return text if text.isdigit() else ""
+    match = re.search(r"(\d{5,12})\s*$", _plain(event))
+    return match.group(1) if match else ""
 
 
-@unbind.handle()
-async def _unbind(bot: Bot, event: MessageEvent, arg: Message = CommandArg()):
+@unbind_matcher.handle()
+async def _unbind(bot: Bot, event: MessageEvent):
     bridge = _BRIDGE
     if bridge is None:
-        await unbind.finish("舞萌直连还没就绪：" + _ready_text())
+        await unbind_matcher.finish("舞萌直连还没就绪：" + _ready_text())
     uid = str(event.user_id)
     is_superuser = uid in {str(item) for item in get_driver().config.superusers}
-    target = _mentioned(event, arg) or uid
+    target = _mentioned(event) or uid
     if target != uid and not is_superuser:
-        await unbind.finish("解绑只能由管理员协助（舞萌解绑 @某人）。")
+        await unbind_matcher.finish("解绑只能由管理员协助（解绑 @某人）。")
     if target == uid and not is_superuser:
         level = await _level_of(uid)
         if level < plugin_config.maimai_dx_self_unbind_level:
-            await unbind.finish(
+            await unbind_matcher.finish(
                 f"自助解绑需要满级 Lv.{plugin_config.maimai_dx_self_unbind_level}，"
                 "现在还不够，请找管理员协助。"
             )
@@ -409,14 +447,23 @@ async def _unbind(bot: Bot, event: MessageEvent, arg: Message = CommandArg()):
     reply = bridge.controller.handle(target_identity, "解绑")
     _BOUND.discard(target_identity)
     suffix = "" if target == uid else f"\n（解绑对象：{target}）"
-    await unbind.finish(reply.text + suffix)
+    await unbind_matcher.finish(reply.text + suffix)
 
 
 # ---------------------------------------------------------------- 其余指令（群内）
 _read_announce = _READ_TIP if plugin_config.maimai_dx_mode == "real" else None
-_simple_command("舞萌资料", "获取基础信息")
-_simple_command("舞萌成绩", "更新成绩", announce=_read_announce)
-_simple_command("舞萌预览", "成绩预览")
-_simple_command("舞萌上传", "确认上传")
-_simple_command("舞萌导出", "导出成绩")
-_simple_command("舞萌登出", "登出", announce=_read_announce)
+
+
+def _register(name: str):
+    matcher = on_message(rule=_group_rule(name), priority=8, block=True)
+    announce = _read_announce if name in ("更新", "登出") else None
+
+    @matcher.handle()
+    async def _handler(bot: Bot, event: MessageEvent):
+        await _run_group(matcher, bot, event, name, _GROUP_TEXT[name], announce)
+
+    return matcher
+
+
+for _name in _GROUP_TEXT:
+    _register(_name)
