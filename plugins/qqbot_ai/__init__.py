@@ -132,11 +132,25 @@ def _feature_allowed(event: MessageEvent) -> bool:
         return True
 
 
+def _is_superuser(event: MessageEvent) -> bool:
+    return event.get_user_id() in {str(uid) for uid in get_driver().config.superusers}
+
+
+def _private_image(event: MessageEvent) -> bool:
+    """私聊里的图片专供「舞萌二维码绑定」，不进模型（群里仍可看图）。"""
+    return isinstance(event, PrivateMessageEvent) and bool(
+        vision.image_sources(event.get_message())
+    )
+
+
 def _enabled(event: MessageEvent) -> bool:
     if isinstance(event, GroupMessageEvent):
         if not plugin_config.qqbot_ai_group_enabled:
             return False
     elif not plugin_config.qqbot_ai_private_enabled:
+        return False
+    elif plugin_config.qqbot_ai_private_superuser_only and not _is_superuser(event):
+        # 私聊只给 SUPERUSERS：群里照旧，机器人主号私聊可以问
         return False
     return _feature_allowed(event)
 
@@ -266,6 +280,8 @@ async def _answer(event: MessageEvent, question: str, allow_images: bool = True)
 
 # ---------------------------------------------------------------- 唤醒词
 async def _wake_rule(event: MessageEvent) -> bool:
+    if _private_image(event):
+        return False
     if _WAKE_RE is None or not _enabled(event):
         return False
     text = _clean_text(event)
@@ -299,6 +315,8 @@ async def _handle_wake(event: MessageEvent) -> None:
 # ---------------------------------------------------------------- @机器人 / 私聊直接问
 async def _direct_rule(event: MessageEvent) -> bool:
     if not isinstance(event, PrivateMessageEvent) and not event.is_tome():
+        return False
+    if _private_image(event):
         return False
     if not _enabled(event):
         return False

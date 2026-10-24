@@ -179,6 +179,9 @@ class Config(BaseModel):
     )
     qqbot_ai_group_enabled: bool = Field(default=True, description="群聊是否启用")
     qqbot_ai_private_enabled: bool = Field(default=True, description="私聊是否启用")
+    qqbot_ai_private_superuser_only: bool = Field(
+        default=True, description="私聊仅 SUPERUSERS 可用（群里不受影响）"
+    )
     qqbot_ai_cooldown_seconds: float = Field(
         default=5.0, ge=0.0, le=300.0, description="同一用户两次提问的最小间隔（秒）"
     )
