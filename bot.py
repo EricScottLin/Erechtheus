@@ -85,6 +85,10 @@ nonebot.load_plugin(Path("plugins/qqbot_pigverse"))
 # AI 问答：喊「小e <问题>」提问，可联网搜索、可看图（qqbot_ai）
 nonebot.load_plugin(Path("plugins/qqbot_ai"))
 
+# 歌词接龙：群里发歌词 -> 接下一句（默认关闭，按群开关 /开启 歌词）
+# 依赖 qqbot_group 的按群功能开关，必须排在 qqbot_group 之后加载。
+nonebot.load_plugin(Path("plugins/qqbot_lyric"))
+
 # 待办清单：/待办、我要做（仅超级用户；可交接给 DSH）
 # 数据在 data/qqbot_todo；提醒 / 每日推送用 nonebot_plugin_apscheduler
 nonebot.load_plugin(Path("plugins/qqbot_todo"))

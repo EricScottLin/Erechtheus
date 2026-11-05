@@ -196,6 +196,21 @@ class Config(BaseModel):
         default=30, ge=1, le=1440, description="历史对话过期时间（分钟）"
     )
 
+    # ---- 群里最近聊天记录（@小e 时随问题一起给模型）----
+    qqbot_ai_history_room_enabled: bool = Field(
+        default=True,
+        description="群里 @机器人 / 喊小e 时，附带最近几条群聊记录（方便回答「这句歌词/这句话啥意思」）",
+    )
+    qqbot_ai_history_room_count: int = Field(
+        default=8, ge=0, le=30, description="附带最近几条群消息"
+    )
+    qqbot_ai_history_room_minutes: int = Field(
+        default=20, ge=1, le=180, description="只取最近几分钟内的群消息"
+    )
+    qqbot_ai_history_room_chars: int = Field(
+        default=600, ge=0, le=4000, description="群聊记录总字数预算"
+    )
+
     # ---- 命令纠错（thefuck 风格）----
     qqbot_ai_typo_suggest_enabled: bool = Field(
         default=True,

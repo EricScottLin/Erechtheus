@@ -251,6 +251,45 @@ def _describe_images(event: MessageEvent) -> str:
     return "帮我看看这张图是什么。"
 
 
+async def _collect_recent_room(bot, event: MessageEvent) -> list[str]:
+    """取最近几条群聊记录（只取文字），用于回答「刚才那句是什么」这类问题。"""
+    cfg = plugin_config
+    if not cfg.qqbot_ai_history_room_enabled or cfg.qqbot_ai_history_room_count <= 0:
+        return []
+    if not isinstance(event, GroupMessageEvent):
+        return []
+    try:
+        history = await bot.call_api(
+            "get_group_msg_history", group_id=event.group_id, count=cfg.qqbot_ai_history_room_count
+        )
+    except Exception as e:  # noqa: BLE001 —— 拿不到历史就正常回答
+        logger.debug(f"[qqbot_ai] 读取群聊记录失败：{e}")
+        return []
+    lines: list[str] = []
+    for msg in (history or {}).get("messages") or []:
+        sender = msg.get("sender") or {}
+        uid = str(msg.get("user_id") or sender.get("user_id") or "")
+        if uid == str(bot.self_id):
+            continue
+        ts = msg.get("time")
+        try:
+            if ts is not None and time.time() - float(ts) > cfg.qqbot_ai_history_room_minutes * 60:
+                continue
+        except (TypeError, ValueError):
+            pass
+        segs = [s for s in (msg.get("message") or []) if isinstance(s, dict)]
+        if not segs:
+            continue
+        text = "".join(
+            str((s.get("data") or {}).get("text") or "") for s in segs if s.get("type") == "text"
+        ).strip()
+        if not text:
+            continue
+        name = str(sender.get("card") or sender.get("nickname") or uid)
+        lines.append(f"{name}: {text_utils.cut_chars(text, 120)}")
+    return lines[-cfg.qqbot_ai_history_room_count :]
+
+
 def _overall_timeout() -> float:
     """整段问答的总超时：每次模型调用 × (工具轮数+2) + 每次搜索耗时。
 
@@ -273,7 +312,9 @@ def _answer_fallback(question: str, had_images: bool = False) -> str:
     return "小e 现在有点忙（模型服务不可用），稍后再问吧。"
 
 
-async def _answer(event: MessageEvent, question: str, allow_images: bool = True) -> str:
+async def _answer(
+    event: MessageEvent, question: str, allow_images: bool = True, bot=None
+) -> str:
     """统一提问入口：校验、压缩、调模型、过滤，返回最终文本（不直接发送）。"""
     if not plugin_config.qqbot_ai_api_key:
         return "还没配置模型 API（qqbot_ai_api_key），请找管理员设置。"
@@ -283,6 +324,7 @@ async def _answer(event: MessageEvent, question: str, allow_images: bool = True)
     if not question and images:
         question = _describe_images(event)
     key = session_key(event)
+    recent = await _collect_recent_room(bot, event) if bot is not None else []
     try:
         reply = await asyncio.wait_for(
             agent.ask(
@@ -290,6 +332,7 @@ async def _answer(event: MessageEvent, question: str, allow_images: bool = True)
                 question,
                 images=images,
                 user_key=user_session_key(event),
+                recent=recent,
             ),
             timeout=_overall_timeout(),
         )
@@ -384,14 +427,14 @@ wake = on_message(rule=Rule(_wake_rule), priority=8, block=True)
 
 
 @wake.handle()
-async def _handle_wake(event: MessageEvent) -> None:
+async def _handle_wake(bot, event: MessageEvent) -> None:
     question = getattr(event, "_qqbot_ai_question", "").strip()
     has_image = bool(vision.image_sources(event.get_message())) or getattr(
         event, "reply", None
     ) is not None
     if not question and not has_image:
         await wake.finish("怎么了？直接说「小e + 你的问题」就行。")
-    await wake.finish(await _answer(event, question))
+    await wake.finish(await _answer(event, question, bot=bot))
 
 
 # ---------------------------------------------------------------- @机器人 / 私聊直接问
@@ -414,8 +457,8 @@ direct = on_message(rule=Rule(_direct_rule), priority=9, block=True)
 
 
 @direct.handle()
-async def _handle_direct(event: MessageEvent) -> None:
-    await direct.finish(await _answer(event, _clean_text(event)))
+async def _handle_direct(bot, event: MessageEvent) -> None:
+    await direct.finish(await _answer(event, _clean_text(event), bot=bot))
 
 
 # ---------------------------------------------------------------- /ai 命令族
@@ -423,7 +466,7 @@ ai_cmd = on_command("ai", aliases={"AI"}, priority=5, block=True)
 
 
 @ai_cmd.handle()
-async def _handle_ai(event: MessageEvent, arg: Message = CommandArg()) -> None:
+async def _handle_ai(bot, event: MessageEvent, arg: Message = CommandArg()) -> None:
     if not _enabled(event):
         await ai_cmd.finish("本群没开小e，找群管发「/开启 小e」。")
 
@@ -453,7 +496,7 @@ async def _handle_ai(event: MessageEvent, arg: Message = CommandArg()) -> None:
     if not await _cooldown_passed(event):
         await ai_cmd.finish()
     # /ai 后面是纯文字参数，没有图片可看，所以不收集图片
-    await ai_cmd.finish(await _answer(event, question, allow_images=False))
+    await ai_cmd.finish(await _answer(event, question, allow_images=False, bot=bot))
 
 
 def _status_text(event: MessageEvent) -> str:

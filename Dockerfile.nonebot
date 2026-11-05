@@ -60,6 +60,10 @@ RUN pip install "pillow<13" nonebot-plugin-nbnhhsh ddgs
 # 舞萌直连（plugins/qqbot_maimai_dx + vendor/MaimaiDXCHN）：机台协议加解密需要
 # pycryptodome。源码不进镜像（私有仓库 + 只读挂载），这里只装运行时依赖。
 RUN pip install "pycryptodome>=3.20,<4"
+# 歌词接龙（plugins/qqbot_lyric）：
+#   pypinyin   押韵判断（没装时退回内置常用字韵母表，仍能工作）
+#   opencc     lrclib 上大量中文歌词是繁体，繁转简后两岸歌词才能匹配
+RUN pip install pypinyin opencc-python-reimplemented
 # 舞萌绑定要解二维码图片：zxing-cpp 有 manylinux wheel，不需要 libzbar 之类的系统包
 RUN pip install zxing-cpp
 # 舞萌「识图」：成绩结算图 OCR。rapidocr 带 onnxruntime 和内置模型，

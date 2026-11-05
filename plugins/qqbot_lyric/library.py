@@ -1,0 +1,592 @@
+"""曲库客户端：lrclib（歌词库）+ 网易云搜索（补歌名）+ 本地行索引（O(1) 反查）。
+
+设计要点（实测得出的结论，见 README「为什么这么设计」）：
+
+1. **lrclib 只适合「歌名精确」的查询**。它的 ``q=`` 是模糊匹配，查「少年中国说」
+   返回 0 条、「小幸运」的 20 条里没有一条副歌 —— 拿整句歌词去 lrclib 搜基本搜不到。
+2. 所以**主路径是先猜歌**（模型给的歌名线索，或「小幸运」这种显著词），
+   用歌名查 lrclib 拉全曲歌词，再在本地逐行比对。
+3. 一旦见过某首歌，就把它的**每一行**写进本地行索引；下次群友发这句歌词时，
+   直接命中、零网络请求。索引是「按需学习」的，用多了就越来越快。
+4. **网易云搜索**只用来补「歌名+歌手」：lrclib 没收录的中文歌（例如张杰
+   《少年中国说》）网易云能搜到，搜到后再回 lrclib 取歌词；取不到就只报歌名。
+
+限流：lrclib 要求别太频繁，所有请求共用一个「最小间隔」闸门。
+"""
+# 作为独立顶层包导入时（单测 `import qqbot_lyric.xxx`）不允许，走插件包 __init__
+if not (__package__ or "").endswith("qqbot_lyric"):
+    raise ImportError("qqbot_lyric 子模块只能以 qqbot_lyric.<module> 形式导入")
+
+
+import asyncio
+import json
+import re
+import time
+from collections import OrderedDict
+from dataclasses import dataclass, field
+from typing import Iterable, Optional
+
+import httpx
+from nonebot.log import logger
+
+from .text import normalize, normalize_variants, to_simplified
+
+LRCLIB_UA = "qqbot-lyric/1.0 (QQ group lyric relay bot)"
+NETEASE_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/120.0 Safari/537.36"
+)
+
+
+@dataclass
+class Song:
+    """一首歌的元信息（可能还没有歌词）。"""
+
+    id: str  # 来源内唯一：lrclib 的 id / netease 的 song id
+    title: str
+    artist: str
+    album: str = ""
+    duration: float = 0.0
+    source: str = "lrclib"
+    has_lyrics: bool = False
+
+    @property
+    def key(self) -> str:
+        return f"{self.source}:{self.id}"
+
+    @property
+    def label(self) -> str:
+        return f"{self.title} - {self.artist}" if self.artist else self.title
+
+    def to_json(self) -> dict:
+        return {
+            "id": self.id, "title": self.title, "artist": self.artist,
+            "album": self.album, "duration": self.duration,
+            "source": self.source, "has_lyrics": self.has_lyrics,
+        }
+
+    @classmethod
+    def from_json(cls, data: dict) -> "Song":
+        return cls(
+            id=str(data.get("id", "")),
+            title=str(data.get("title", "")),
+            artist=str(data.get("artist", "")),
+            album=str(data.get("album", "")),
+            duration=float(data.get("duration") or 0.0),
+            source=str(data.get("source", "lrclib")),
+            has_lyrics=bool(data.get("has_lyrics")),
+        )
+
+
+_GENERIC_PAREN_RE = re.compile(
+    r"[（(\[【][^）)\]】]*(?:版|live|伴奏|remix|翻唱|cover|demo|现场|混音|片段|dj|DJ|女声|男声)[^）)\]】]*[）)\]】]",
+    re.IGNORECASE,
+)
+
+
+def clean_title(title: str) -> str:
+    """去掉「(Live)」「【伴奏版】」这类后缀，提高检索命中率。"""
+    text = _GENERIC_PAREN_RE.sub("", title or "")
+    text = re.sub(r"\s*-\s*(?:live|remix|伴奏|纯音乐).*$", "", text, flags=re.I)
+    return " ".join(text.split()).strip()
+
+
+def parse_lrc(text: str) -> list[str]:
+    """LRC → 纯歌词行（去时间戳、去空行、繁体转简体）。"""
+    lines: list[str] = []
+    for raw in (text or "").splitlines():
+        line = re.sub(r"^\[[^\]]*\]", "", raw).strip()
+        if not line:
+            continue
+        lines.append(to_simplified(line))
+    return lines
+
+
+def parse_plain(text: str) -> list[str]:
+    """纯文本歌词 → 行列表（繁体转简体）。
+
+    lrclib 上相当多的中文歌词是繁体（《晴天》《小幸运》都是），
+    不转简体的话大陆群友打的简体歌词永远匹配不上。
+    """
+    return [" ".join(to_simplified(line).split()) for line in (text or "").splitlines() if line.strip()]
+
+
+@dataclass
+class LyricLine:
+    """索引里的一行歌词。"""
+
+    norm: str  # 归一化后（去标点空白）
+    text: str  # 原始展示文本
+    index: int  # 在该歌曲歌词里的行号（0 起）
+    ts: float = field(default_factory=time.time)
+
+
+class RateLimiter:
+    """异步最小间隔闸门（lrclib 要求克制的请求频率）。"""
+
+    def __init__(self, interval: float = 0.25) -> None:
+        self.interval = max(0.0, interval)
+        self._lock = asyncio.Lock()
+        self._last = 0.0
+
+    async def __aenter__(self) -> "RateLimiter":
+        await self._lock.acquire()
+        now = time.monotonic()
+        wait = self.interval - (now - self._last)
+        if wait > 0:
+            await asyncio.sleep(wait)
+        self._last = time.monotonic()
+        return self
+
+    async def __aexit__(self, *exc) -> None:
+        self._lock.release()
+
+
+class HttpGetter:
+    """统一 GET：超时、UA、限流、异常吞掉（返回 ``None``）。"""
+
+    def __init__(self, timeout: float, limiter: Optional[RateLimiter] = None) -> None:
+        self.timeout = timeout
+        self.limiter = limiter or RateLimiter(0.25)
+        self._client: Optional[httpx.AsyncClient] = None
+
+    def _get_client(self) -> httpx.AsyncClient:
+        if self._client is None or self._client.is_closed:
+            self._client = httpx.AsyncClient(
+                timeout=httpx.Timeout(self.timeout, connect=min(5.0, self.timeout)),
+                headers={"User-Agent": LRCLIB_UA, "Accept": "application/json"},
+                trust_env=False,
+            )
+        return self._client
+
+    async def close(self) -> None:
+        if self._client is not None and not self._client.is_closed:
+            await self._client.aclose()
+        self._client = None
+
+    async def get_json(self, url: str, params: Optional[dict] = None) -> object | None:
+        try:
+            async with self.limiter:
+                resp = await self._get_client().get(url, params=params)
+            if resp.status_code != 200:
+                logger.debug(f"[qqbot_lyric] HTTP {resp.status_code} {url}")
+                return None
+            return resp.json()
+        except (httpx.HTTPError, ValueError) as e:
+            logger.debug(f"[qqbot_lyric] 请求失败 {url}：{type(e).__name__} {e}")
+            return None
+
+
+class Lrclib:
+    """lrclib.net 客户端（免费、无需 key）。"""
+
+    def __init__(self, base: str, timeout: float, max_lines: int = 400) -> None:
+        self.base = (base or "https://lrclib.net").rstrip("/")
+        self.http = HttpGetter(timeout, RateLimiter(0.3))
+        self.max_lines = max_lines
+
+    async def close(self) -> None:
+        await self.http.close()
+
+    async def search(self, q: str, limit: int = 3) -> list[Song]:
+        """按关键词（歌名 / 歌名+歌手）搜索。"""
+        q = (q or "").strip()
+        if not q:
+            return []
+        data = await self.http.get_json(f"{self.base}/api/search", {"q": q})
+        if not isinstance(data, list):
+            return []
+        songs: list[Song] = []
+        for item in data[:limit]:
+            try:
+                songs.append(
+                    Song(
+                        id=str(item.get("id", "")),
+                        title=str(item.get("trackName") or item.get("name") or ""),
+                        artist=str(item.get("artistName") or ""),
+                        album=str(item.get("albumName") or ""),
+                        duration=float(item.get("duration") or 0),
+                        source="lrclib",
+                    )
+                )
+            except (TypeError, ValueError):
+                continue
+        # 同名 + 同歌手 / 歌手互为别名的多个版本只留一个：
+        # 网易云常返回「RyaVocal」「Jay」这类偏门歌手版本，把名额省给原型歌手
+        seen: set[str] = set()
+        out: list[Song] = []
+        for song in songs:
+            key = clean_title(song.title)
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(song)
+        return out
+
+    async def lyrics(self, song: Song) -> Optional[list[str]]:
+        """取整首歌词（优先同步歌词，其次纯文本）。"""
+        data = await self.http.get_json(f"{self.base}/api/get/{song.id}")
+        if isinstance(data, dict):
+            lines = parse_lrc(data.get("syncedLyrics") or "") or parse_plain(
+                data.get("plainLyrics") or ""
+            )
+            if lines:
+                song.has_lyrics = True
+                if not song.artist:
+                    song.artist = str(data.get("artistName") or "")
+                return lines[: self.max_lines]
+        # /api/get 偶尔抽风时退回搜索结果的 lyrics 字段
+        data = await self.http.get_json(f"{self.base}/api/search", {"q": song.title})
+        if isinstance(data, list):
+            for item in data:
+                if str(item.get("id")) != song.id:
+                    continue
+                lines = parse_lrc(item.get("syncedLyrics") or "") or parse_plain(
+                    item.get("plainLyrics") or ""
+                )
+                if lines:
+                    song.has_lyrics = True
+                    return lines[: self.max_lines]
+        return None
+
+
+class Netease:
+    """网易云搜索（只用来补歌名歌手；接口未登录、不保证稳定，失败就放弃）。"""
+
+    SEARCH_URL = "https://music.163.com/api/search/get"
+
+    def __init__(self, timeout: float, limit: int = 3) -> None:
+        self.timeout = timeout
+        self.limit = limit
+        self._client: Optional[httpx.AsyncClient] = None
+        self._broken_until = 0.0  # 连续失败后退避，别每条消息都硬等
+
+    def _get_client(self) -> httpx.AsyncClient:
+        if self._client is None or self._client.is_closed:
+            self._client = httpx.AsyncClient(
+                timeout=httpx.Timeout(self.timeout, connect=min(5.0, self.timeout)),
+                headers={
+                    "User-Agent": NETEASE_UA,
+                    "Referer": "https://music.163.com/",
+                    "Cookie": "NMTID=00O",
+                },
+                trust_env=False,
+            )
+        return self._client
+
+    async def close(self) -> None:
+        if self._client is not None and not self._client.is_closed:
+            await self._client.aclose()
+        self._client = None
+
+    @property
+    def available(self) -> bool:
+        return time.monotonic() >= self._broken_until
+
+    async def search(self, keywords: str) -> list[Song]:
+        if not self.available:
+            return []
+        try:
+            resp = await self._get_client().get(
+                self.SEARCH_URL,
+                params={"s": keywords, "type": 1, "limit": self.limit, "offset": 0},
+            )
+            if resp.status_code != 200:
+                raise RuntimeError(f"HTTP {resp.status_code}")
+            data = resp.json()
+        except Exception as e:  # noqa: BLE001 —— 网易云失败是常态，不应影响主流程
+            logger.debug(f"[qqbot_lyric] 网易云搜索失败：{type(e).__name__} {e}")
+            self._broken_until = time.monotonic() + 300
+            return []
+        result = (data or {}).get("result") or {}
+        out: list[Song] = []
+        for item in (result.get("songs") or [])[: self.limit]:
+            artists = item.get("artists") or []
+            out.append(
+                Song(
+                    id=str(item.get("id", "")),
+                    title=str(item.get("name") or ""),
+                    artist="、".join(str(a.get("name", "")) for a in artists),
+                    album=str((item.get("album") or {}).get("name") or ""),
+                    duration=float(item.get("duration") or 0) / 1000.0,
+                    source="netease",
+                )
+            )
+        return out
+
+
+class LineIndex:
+    """本地歌词行索引：归一化行 → (歌, 行号)。
+
+    只做「精确整行命中」——歌词里同一句一般只属于一首歌，精确命中几乎不会错，
+    而且快（O(1)）。模糊「包含」命中由 :mod:`search` 的序列扫描负责。
+    """
+
+    def __init__(self, capacity: int = 200000) -> None:
+        self.capacity = max(1000, int(capacity))
+        self._index: OrderedDict[str, list[tuple[Song, int]]] = OrderedDict()
+        self._songs: dict[str, list[str]] = {}  # song.key -> 归一化行列表（按行号）
+        self._meta: dict[str, Song] = {}
+
+    def __len__(self) -> int:
+        return len(self._index)
+
+    @property
+    def song_count(self) -> int:
+        return len(self._meta)
+
+    def add_song(self, song: Song, lines: Iterable[str]) -> None:
+        """把一首歌的每一行写进索引。
+
+        每行同时索引「原文归一」和「简体归一」两种形态：lrclib 的歌词大多是
+        繁体，群友打简体时两种形态必须都能命中（"愛你孤身走暗巷" ↔ "爱你孤身走暗巷"）。
+        """
+        norm_lines = [normalize_variants(line) for line in lines]
+        key = song.key
+        self._meta[key] = song
+        self._songs[key] = norm_lines
+        for idx, forms in enumerate(norm_lines):
+            for norm in forms:
+                if len(norm) < 3:
+                    continue
+                bucket = self._index.setdefault(norm, [])
+                entry = (song, idx)
+                if entry not in bucket:
+                    bucket.append(entry)
+                self._index.move_to_end(norm)
+        while len(self._index) > self.capacity:
+            self._index.popitem(last=False)
+
+    def lookup(self, text: str) -> list[tuple[Song, int]]:
+        out: list[tuple[Song, int]] = []
+        seen: set[tuple[str, int]] = set()
+        for norm in normalize_variants(text):
+            hits = self._index.get(norm)
+            if hits is None:
+                continue
+            self._index.move_to_end(norm)
+            for song, idx in hits:
+                if (song.key, idx) in seen:
+                    continue
+                seen.add((song.key, idx))
+                out.append((song, idx))
+        return out
+
+    def lines_of(self, song: Song) -> list[str]:
+        """展示用的歌词行（原文形态，繁体歌词显示繁体）。"""
+        return [forms[0] if forms else "" for forms in self._songs.get(song.key, [])]
+
+    def known(self, song: Song) -> bool:
+        return song.key in self._songs
+
+    def songs(self) -> list[Song]:
+        return list(self._meta.values())
+
+    # ------------------------------------------------------------- 落盘
+    def dump(self) -> dict:
+        songs = []
+        for key, song in self._meta.items():
+            lines = self._songs.get(key, [])
+            if not lines:
+                continue
+            # 只存原文形态（展示/重灌索引时按变体重建）
+            songs.append(
+                {"song": song.to_json(), "lines": [forms[0] for forms in lines][: self._max_store(key)]}
+            )
+        return {"version": 2, "songs": songs}
+
+    @staticmethod
+    def _max_store(key: str) -> int:
+        return 400
+
+    def load(self, data: dict) -> None:
+        for item in (data or {}).get("songs") or []:
+            try:
+                song = Song.from_json(item.get("song") or {})
+                lines = [str(x) for x in item.get("lines") or []]
+            except (TypeError, ValueError):
+                continue
+            if song.id and lines:
+                self.add_song(song, lines)
+
+
+def _spawn_warm(library: "Library", songs: list[Song]) -> None:
+    """后台预拉歌词；没有事件循环时（单测/同步上下文）直接跳过。"""
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return
+    try:
+        task = asyncio.create_task(library._warm(songs))
+        _warm_tasks.add(task)
+        task.add_done_callback(_warm_tasks.discard)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+_warm_tasks: set = set()
+
+
+class Library:
+    """曲库门面：负责「按歌名找歌 → 拉歌词 → 进索引」和「网易云兜底」。"""
+
+    def __init__(
+        self,
+        lrclib_base: str,
+        timeout: float,
+        max_song_lines: int = 400,
+        cache_songs: int = 500,
+        cache_line_index: int = 200000,
+        netease_enabled: bool = True,
+    ) -> None:
+        self.lrclib = Lrclib(lrclib_base, timeout, max_song_lines)
+        self.netease = Netease(timeout) if netease_enabled else None
+        self.index = LineIndex(cache_line_index)
+        self.cache_songs = max(0, cache_songs)
+        self._search_cache: OrderedDict[str, list[Song]] = OrderedDict()
+        self._locks: dict[str, asyncio.Lock] = {}
+        self.stats = {"lrclib": 0, "netease": 0, "index_hit": 0}
+
+    async def close(self) -> None:
+        await self.lrclib.close()
+        if self.netease is not None:
+            await self.netease.close()
+
+    # ------------------------------------------------------------- 搜索缓存
+    def _cached(self, q: str) -> Optional[list[Song]]:
+        hits = self._search_cache.get(q)
+        if hits is not None:
+            self._search_cache.move_to_end(q)
+        return hits
+
+    def _remember(self, q: str, songs: list[Song]) -> None:
+        if self.cache_songs <= 0:
+            return
+        self._search_cache[q] = songs
+        self._search_cache.move_to_end(q)
+        while len(self._search_cache) > self.cache_songs:
+            self._search_cache.popitem(last=False)
+
+    async def search_songs(self, q: str, limit: int = 3) -> list[Song]:
+        q = (q or "").strip()
+        if not q:
+            return []
+        cached = self._cached(q)
+        if cached is not None:
+            if cached:
+                _spawn_warm(self, cached[:2])
+            return cached[:limit]
+        songs = await self.lrclib.search(q, limit=limit)
+        self.stats["lrclib"] += 1
+        self._remember(q, songs)
+        if songs:
+            # 顺手把头几首的歌词拉进索引（异步、不阻塞本次返回）
+            _spawn_warm(self, songs[:2])
+        return songs
+
+    async def _warm(self, songs: list[Song]) -> None:
+        for song in songs:
+            try:
+                await self.ensure_lyrics(song)
+            except Exception as e:  # noqa: BLE001
+                logger.debug(f"[qqbot_lyric] 预拉歌词失败 {song.label}：{e}")
+
+    async def ensure_lyrics(self, song: Song) -> Optional[list[str]]:
+        """确保这首歌的歌词在索引里；返回歌词行（取不到返回 None）。"""
+        if self.index.known(song):
+            lines = self.index.lines_of(song)
+            return lines or None
+        lock = self._locks.setdefault(song.key, asyncio.Lock())
+        async with lock:
+            if self.index.known(song):
+                return self.index.lines_of(song) or None
+            lines = await self.lrclib.lyrics(song)
+            if lines:
+                self.index.add_song(song, lines)
+                return lines
+            return None
+
+    async def netease_candidates(self, keywords: str) -> list[Song]:
+        if self.netease is None:
+            return []
+        songs = await self.netease.search(keywords)
+        if songs:
+            self.stats["netease"] += 1
+        return songs
+
+    async def fetch_by_title(self, title: str) -> list[tuple[Song, list[str]]]:
+        """按歌名精确取歌词：搜索结果里标题和原文一致（去后缀后）才算。
+
+        比 ``search_songs`` 更严：模糊搜索「晴天 周杰伦」会返回《周杰伦-晴天》
+        《晴天remix》这类，这里只要同名同名的原型，避免把翻唱/remix 的歌词接上来。
+        """
+        title = clean_title(title)
+        if not title:
+            return []
+        songs = await self.search_songs(title, limit=5)
+        out: list[tuple[Song, list[str]]] = []
+        for song in songs:
+            if clean_title(song.title) != title:
+                continue
+            lines = await self.ensure_lyrics(song)
+            if lines:
+                out.append((song, lines))
+        # 网上同名的翻唱/remix 版本很多：只留「原型歌手」的几首
+        if len(out) > 2:
+            named = [p for p in out if p[0].artist and title in f"{p[0].artist}{p[0].title}"]
+            out = (named + out)[:2] if named else out[:2]
+        return out
+
+    async def netease_lookup(self, keywords: str, text_norm: str = "") -> str:
+        """用网易云按内容搜索，返回最可能包含 ``text_norm`` 的歌名（不含歌手）。
+
+        网易云搜索结果里，第一首往往就是答案（它按相关度排序）；但如果带进
+        歌词片段一起算，还能把「本来排第一但其实是别的歌」换掉。
+        """
+        from .search import similarity  # 延迟导入，避免循环
+
+        songs = await self.netease_candidates(keywords)
+        if not songs:
+            return ""
+        best_title, best_score = "", 0.0
+        for rank, song in enumerate(songs[:3]):
+            title = clean_title(song.title)
+            if not title:
+                continue
+            # 歌名本身出现在片段里 = 强信号（如「小幸运」这种点题词）
+            score = 0.55 - 0.05 * rank
+            if text_norm and similarity(title, text_norm) >= 0.5:
+                score += 0.35
+            if len(title) >= 2 and text_norm and title in text_norm:
+                score += 0.2
+            if score > best_score:
+                best_title, best_score = title, score
+        return best_title
+
+    async def find_by_name(self, title: str, artist: str = "") -> Optional[Song]:
+        """按歌名（+歌手）找一首**带歌词**的歌。"""
+        title = clean_title(title)
+        if not title:
+            return None
+        queries = [f"{title} {artist}".strip(), title]
+        for q in queries:
+            for song in await self.search_songs(q):
+                if song.has_lyrics:
+                    return song
+                lines = await self.ensure_lyrics(song)
+                if lines:
+                    return song
+        return None
+
+
+def similarity_scores(candidates: str, songs: list[Song]) -> dict[str, float]:
+    """模型给出的候选歌名 → 与用户文本的相似度（含标题子串命中加分）。"""
+    from .search import similarity  # 避免循环导入
+
+    out: dict[str, float] = {}
+    for song in songs:
+        out[song.key] = max(
+            similarity(candidates, song.title),
+            similarity(candidates, clean_title(song.title)),
+        )
+    return out

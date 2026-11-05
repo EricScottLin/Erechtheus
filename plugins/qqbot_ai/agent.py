@@ -71,14 +71,20 @@ class Agent:
         question: str,
         images: Optional[list[str]] = None,
         user_key: str = "",
+        recent: Optional[list[str]] = None,
     ) -> list[dict[str, Any]]:
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": self.system_prompt()}
         ]
+        recent_block = render_recent(recent or [], self.config.qqbot_ai_history_room_chars)
+        if recent_block:
+            # 「刚才群里聊了什么」不作为对话轮次，而是塞进系统消息里，
+            # 这样不会打乱「上一问/上一答」的轮次结构
+            messages[0]["content"] += "\n\n" + recent_block
         messages.extend(
             self.store.build_context(
                 key,
-                budget_chars=self.config.qqbot_ai_max_context_chars,
+                budget_chars=max(0, self.config.qqbot_ai_max_context_chars - len(recent_block)),
                 max_input_chars=self.config.qqbot_ai_max_input_chars,
                 user_key=user_key,
             )
@@ -103,6 +109,7 @@ class Agent:
         raw_question: str,
         images: Optional[list[str]] = None,
         user_key: str = "",
+        recent: Optional[list[str]] = None,
     ) -> AgentReply:
         """核心入口：压缩输入 → 预筛 → 多轮工具调用 → 过滤输出。
 
@@ -122,7 +129,7 @@ class Agent:
         if refusal:
             return AgentReply(text=refusal, elapsed=self._elapsed(started))
 
-        messages = self.build_messages(key, question, images, user_key)
+        messages = self.build_messages(key, question, images, user_key, recent)
         # 带图时用视觉模型；工具也照常可用（视觉模型一般同样支持）
         model = self._pick_model(messages)
         tools_schema = [t.schema() for t in self._tools] or None
@@ -260,3 +267,25 @@ class Agent:
 
     async def close(self) -> None:
         await self.client.close()
+
+
+def render_recent(lines: list[str], max_chars: int) -> str:
+    """把「刚才群里聊的几句」渲染成系统消息片段（从新到旧取，保证不超预算）。"""
+    if not lines or max_chars <= 0:
+        return ""
+    picked: list[str] = []
+    used = 0
+    for line in reversed(lines):
+        text = text_utils.fold_whitespace(str(line or ""))
+        if not text:
+            continue
+        cost = len(text) + 1
+        if used + cost > max_chars:
+            break
+        picked.append(text)
+        used += cost
+    if not picked:
+        return ""
+    picked.reverse()
+    head = "【群里刚才的聊天记录（最新在下）】问「这句是什么歌/谁说的」时用这个上下文回答。"
+    return head + "\n" + "\n".join(picked)
