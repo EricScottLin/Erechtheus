@@ -251,9 +251,17 @@ class Lrclib:
 
 
 class Netease:
-    """网易云搜索（只用来补歌名歌手；接口未登录、不保证稳定，失败就放弃）。"""
+    """网易云：按内容搜歌 + 直接取歌词（未登录接口，不保证稳定，失败就放弃）。
+
+    这两个能力是社区插件的通行做法：酷我插件 [1] 用
+    ``m.kuwo.cn/newh5/singles/songinfoandlrc``、通用点歌插件 [2] 同时支持
+    网易/QQ/酷狗/咪咕、AstrBot 歌词接龙插件 [3] 也走「按内容搜歌」。
+    我们只借它补 lrclib 的缺口，不依赖它的稳定性（失败自动退避 5 分钟）。
+    """
 
     SEARCH_URL = "https://music.163.com/api/search/get"
+    # 歌词接口：返回 {"lrc": {"lyric": "[00:00.00]..."},"tlyric": {...}} 或 {"nolyric": true}
+    LYRIC_URL = "https://music.163.com/api/song/lyric"
 
     def __init__(self, timeout: float, limit: int = 3) -> None:
         self.timeout = timeout
@@ -313,6 +321,26 @@ class Netease:
                 )
             )
         return out
+
+    async def lyrics(self, song: Song) -> Optional[list[str]]:
+        """网易云歌词（LRC → 行列表，顺便转简体）。取不到返回 None。"""
+        if not song.id or not self.available:
+            return None
+        try:
+            resp = await self._get_client().get(
+                self.LYRIC_URL, params={"id": song.id, "lv": -1, "kv": -1, "tv": -1}
+            )
+            if resp.status_code != 200:
+                return None
+            data = resp.json()
+        except Exception as e:  # noqa: BLE001 —— 网易云不稳定，失败不影响主流程
+            logger.debug(f"[qqbot_lyric] 网易云歌词失败：{type(e).__name__} {e}")
+            return None
+        if not isinstance(data, dict) or data.get("nolyric"):
+            return None
+        raw = (data.get("lrc") or {}).get("lyric") or ""
+        lines = parse_lrc(raw)
+        return lines or None
 
 
 class LineIndex:
@@ -505,6 +533,40 @@ class Library:
                 self.index.add_song(song, lines)
                 return lines
             return None
+
+    async def netease_lyric_lookup(self, keywords: str, text_norm: str = "") -> Optional[tuple[Song, list[str]]]:
+        """按内容搜歌，命中后直接向网易云取歌词（不再依赖 lrclib 是否有这首歌）。
+
+        与 :meth:`netease_lookup` 的区别：那个只返回歌名，还要回 lrclib 取歌词，
+        lrclib 没收录的歌（如张杰《少年中国说》）就只能报歌名；这里直接拿网易云
+        的歌词，能真正接上。
+        """
+        from .search import best_window, similarity
+
+        songs = await self.netease_candidates(keywords)
+        if not songs:
+            return None
+        def rank(song: Song) -> float:
+            title = clean_title(song.title)
+            return (
+                -(0.55 - 0.05 * songs.index(song))
+                + (0.4 if text_norm and similarity(title, text_norm) >= 0.5 else 0.0)
+                + (0.2 if text_norm and title and title in text_norm else 0.0)
+            )
+
+        ranked = sorted(songs[:3], key=rank)
+        for song in ranked:
+            lines = await self.netease.lyrics(song) if self.netease is not None else None
+            if not lines:
+                continue
+            score, _start, _end = best_window(text_norm, lines, 3)
+            if score >= 0.6:  # 找到这首里的对应行，才值得交给上层复核
+                song = Song(id=song.id, title=song.title, artist=song.artist,
+                            album=song.album, duration=song.duration,
+                            source="netease", has_lyrics=True)
+                self.index.add_song(song, lines)  # 进本地索引：下次零网络，也能反向取歌词
+                return song, lines
+        return None
 
     async def netease_candidates(self, keywords: str) -> list[Song]:
         if self.netease is None:

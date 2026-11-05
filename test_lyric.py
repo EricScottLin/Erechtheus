@@ -92,6 +92,14 @@ class FakeLibrary:
     async def netease_candidates(self, keywords):
         return self._netease.get(keywords, [])
 
+    async def netease_lyric_lookup(self, keywords, text_norm=""):
+        songs = self._netease.get(keywords, [])
+        if not songs:
+            return None
+        song = songs[0]
+        lines = self.lines.get(song.title) or []
+        return (song, lines) if lines else None
+
     async def netease_lookup(self, keywords, text_norm=""):
         from qqbot_lyric.library import clean_title
 
@@ -284,6 +292,15 @@ class TestSearch(unittest.TestCase):
         hit = self.run_search("后来总算学会了", hint_title="后来", hint_artist="刘若英")
         self.assertIsNotNone(hit)
         self.assertEqual(hit.song.title, "后来")
+
+    def test_netease_direct_lyrics(self):
+        """lrclib 没收录的歌：网易云按内容搜到 + 直接给歌词，也要能接上。"""
+        netease_song = library.Song(id="9", title="小幸运", artist="田馥甄", source="netease")
+        self.lib = FakeLibrary({"小幸运|田馥甄": ["我听见雨滴落在青青草地", "我听见远方下课钟声响起"]},
+                               netease={"我听见雨滴落在青青草地": [netease_song]})
+        hit = self.run_search("我听见雨滴落在青青草地")
+        self.assertIsNotNone(hit)
+        self.assertEqual(hit.next_line, "我听见远方下课钟声响起")
 
     def test_netease_fallback(self):
         netease_song = library.Song(id="99", title="小幸运", artist="田馥甄", source="netease")

@@ -249,23 +249,20 @@ async def search(
         if hit is not None and hit.score >= min_score:
             return hit
 
-    # 6) 网易云兜底（最慢，放最后）。网易云的搜索是「按内容」的：
+    # 6) 网易云兜底（最慢，放最后）。网易云搜索是「按内容」的：
     #    直接拿整句歌词去搜，就能搜到它所属的歌（「我听见雨滴落在青青草地」→ 小幸运）。
     #    lrclib 的模糊搜索做不到这点（实测同一句返回 0 条）。
+    #    命中后直接取网易云的歌词 —— 连 lrclib 没收录的歌也能接上。
     if allow_netease and library.netease is not None:
         for phrase in netease_queries(ctx):
-            song_title = await library.netease_lookup(phrase, ctx.text_norm)
-            if not song_title:
+            found = await library.netease_lyric_lookup(phrase, ctx.text_norm)
+            if not found:
                 continue
-            pairs = await library.fetch_by_title(song_title)
-            best: Optional[Hit] = None
-            for song, lines in pairs:
-                score, start, end = best_window(ctx.text_norm, lines, 3)
-                if best is None or score > best.score:
-                    best = Hit(song=song, score=min(1.0, score), lines=lines,
-                               start=start, end=end, how="netease")
-            if best is not None and best.score >= min_score:
-                return best
+            song, lines = found
+            score, start, end = best_window(ctx.text_norm, lines, 3)
+            if score >= min_score:
+                return Hit(song=song, score=min(1.0, score), lines=lines,
+                           start=start, end=end, how="netease")
     return None
 
 
