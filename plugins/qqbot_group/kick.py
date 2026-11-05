@@ -4,6 +4,7 @@ from nonebot import on_command
 from nonebot.adapters.onebot.v11 import ActionFailed, Bot, GroupMessageEvent, Message, MessageSegment
 from nonebot.params import CommandArg
 
+from . import features
 from .helpers import extract_target
 from .permissions import check_admin, describe_error, finish_denial
 
@@ -15,6 +16,9 @@ async def handle_kick(
     bot: Bot, event: GroupMessageEvent, arg: Message = CommandArg()
 ) -> None:
     """移出群聊。"""
+    if not features.is_enabled(event.group_id, "kick"):
+        await kick.finish("本群的「踢人」功能被管理员关闭了。")
+
     denial = await check_admin(bot, event)
     if denial:
         await finish_denial(kick, bot, event, denial)

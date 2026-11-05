@@ -145,6 +145,7 @@ def sync_external_features() -> None:
 
 
 # 内置功能（repeat / teach 由 qqbot_repeat 插件注册）
+register_feature("kick", "踢人", aliases=("踢", "kick", "移出群聊"))
 register_feature("poke", "戳一戳表情", aliases=("戳一戳", "拍一拍", "戳一戳回图"))
 register_feature("quotes", "金句", aliases=("金句库",))
 register_feature("meme", "表情包", aliases=("表情", "/表情"))
