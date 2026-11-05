@@ -13,6 +13,10 @@
     qqbot_repeat_times=3
     qqbot_repeat_cooldown=60
     qqbot_repeat_max_len=200
+    # 同一内容只复读一次（默认开；0=进程内永久记住，可设 TTL）
+    qqbot_repeat_once_per_content=true
+    qqbot_repeat_memory_size=200
+    qqbot_repeat_memory_ttl=0
 
     # 我说你说
     qqbot_repeat_teach_enabled=true
@@ -61,6 +65,18 @@ class Config(BaseModel):
     qqbot_repeat_max_len: int = Field(
         default=200, ge=1, le=2000,
         description="超过该长度的文本不参与复读",
+    )
+    qqbot_repeat_once_per_content: bool = Field(
+        default=True,
+        description="同一内容只复读一次：bot 参与过一次后，后面再刷同样的内容不再跟发",
+    )
+    qqbot_repeat_memory_size: int = Field(
+        default=200, ge=1, le=5000,
+        description="每个群记住多少个已复读内容（超出后淘汰最久没出现的）",
+    )
+    qqbot_repeat_memory_ttl: int = Field(
+        default=0, ge=0, le=30 * 86400,
+        description="已复读内容的记忆时长（秒）；0 表示本次进程内一直记住",
     )
 
     # ---- 我说你说 ----

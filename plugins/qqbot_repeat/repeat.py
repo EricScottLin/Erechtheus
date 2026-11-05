@@ -6,12 +6,15 @@
   ``qqbot_repeat_times``（默认 3）时复读一次；
 - 同一个人重复发不增加人数（避免单人刷屏触发）；
 - 图片按 ``file``（QQ 的内容哈希文件名）识别，表情（mface）按 ``id``/``summary`` 识别；
-- 触发后进入 ``qqbot_repeat_cooldown`` 秒冷却（默认 60 秒）；
+- **同一内容只复读一次**：bot 参与过某句话/某张图后，后面再刷同样的内容不再跟发
+  （``qqbot_repeat_once_per_content``，默认开）；
+- 触发后进入 ``qqbot_repeat_cooldown`` 秒冷却（默认 60 秒），避免不同内容连续刷屏；
 - 命令消息（以 / 开头）、空消息、超长文本不参与；图文混合消息会重置计数；
 - 「我说X你说Y」教学命令本身不参与复读。
 """
 
 import time
+from collections import OrderedDict
 from dataclasses import dataclass, field
 
 from nonebot import on_message
@@ -40,6 +43,31 @@ class _Run:
 _state: dict[int, _Run] = {}
 # group_id -> 冷却截止时间戳
 _cooldown: dict[int, float] = {}
+# group_id -> 已复读过的内容 key -> 最后复读时间戳（OrderedDict 当 LRU 用）
+_repeated: dict[int, OrderedDict[tuple, float]] = {}
+
+
+def _already_repeated(group_id: int, key: tuple, now: float) -> bool:
+    """这个内容是不是已经由 bot 复读过了（TTL 过期则视为没复读过）。"""
+    bucket = _repeated.get(group_id)
+    if not bucket or key not in bucket:
+        return False
+    ttl = plugin_config.qqbot_repeat_memory_ttl
+    if ttl > 0 and now - bucket[key] > ttl:
+        bucket.pop(key, None)
+        return False
+    bucket.move_to_end(key)
+    return True
+
+
+def _mark_repeated(group_id: int, key: tuple, now: float) -> None:
+    """记住「这个内容 bot 已经复读过了」，超出容量时淘汰最久没出现的。"""
+    bucket = _repeated.setdefault(group_id, OrderedDict())
+    bucket[key] = now
+    bucket.move_to_end(key)
+    limit = plugin_config.qqbot_repeat_memory_size
+    while len(bucket) > limit:
+        bucket.popitem(last=False)
 
 
 def _image_key(seg: MessageSegment) -> tuple | None:
@@ -133,10 +161,18 @@ async def handle_repeat(bot: Bot, event: GroupMessageEvent) -> None:
         return
 
     now = time.time()
+    # 同一内容 bot 只参与一次：刷过「你好」之后，再凑 3 个人刷「你好」也不跟
+    if cfg.qqbot_repeat_once_per_content and _already_repeated(
+        event.group_id, key, now
+    ):
+        _state.pop(event.group_id, None)
+        return
     if now < _cooldown.get(event.group_id, 0.0):
         _state.pop(event.group_id, None)
         return
 
     _cooldown[event.group_id] = now + cfg.qqbot_repeat_cooldown
+    if cfg.qqbot_repeat_once_per_content:
+        _mark_repeated(event.group_id, key, now)
     _state.pop(event.group_id, None)
     await _send_repeat(seg)

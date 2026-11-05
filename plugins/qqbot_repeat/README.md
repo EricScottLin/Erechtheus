@@ -68,10 +68,17 @@ qqbot_repeat_extra_admins=123456,789012
 ## 连续复读
 
 无需命令：同一群内连续 **`qqbot_repeat_times` 个不同用户**（默认 3 人）
-发来相同的文本或**同一张表情包/图片**时，机器人跟发一次，随后进入冷却（默认 60 秒）。
+发来相同的文本或**同一张表情包/图片**时，机器人跟发一次。
+
+**同一内容 bot 只参与一次**：比如 3 个人刷「你好」→ bot 复读一遍「你好」；
+后面再凑 3 个人刷「你好」，bot 不会再跟发（默认开启，`qqbot_repeat_once_per_content`）。
+只有换了新内容（比如又有人刷「晚安」）才会再次参与。
 
 - 文本与图片/表情都支持：图片按 QQ 的内容哈希文件名识别，表情按 id 识别
 - 按**不同用户数**计数：同一个人连发同样的内容不会触发
+- 已复读内容按群记忆（默认每群 200 条，LRU 淘汰；`qqbot_repeat_memory_ttl`
+  可设置记忆时长，`0` 表示本次进程内一直记住）
+- 不同内容之间仍有 `qqbot_repeat_cooldown` 秒冷却（默认 60 秒），避免连续刷屏
 - 以 `/` 开头的命令、空消息、超长文本、图文混合消息不参与（会重置计数）
 - 可用 `qqbot_repeat_enabled=false` 关闭，或用
   `qqbot_repeat_include_images=false` 只复读文本
@@ -130,6 +137,9 @@ data/qqbot_repeat/
 | `qqbot_repeat_times` | int | `3` | 连续多少个不同用户触发（2–10） |
 | `qqbot_repeat_cooldown` | int | `60` | 同一群两次复读的最小间隔（秒） |
 | `qqbot_repeat_max_len` | int | `200` | 超过该长度的文本不参与复读 |
+| `qqbot_repeat_once_per_content` | bool | `true` | 同一内容只复读一次，避免反复参与同一个梗 |
+| `qqbot_repeat_memory_size` | int | `200` | 每个群记住多少个已复读内容（LRU） |
+| `qqbot_repeat_memory_ttl` | int | `0` | 已复读内容记忆时长（秒）；0=进程内永久 |
 | `qqbot_repeat_teach_enabled` | bool | `true` | 是否启用我说你说 |
 | `qqbot_repeat_teach_admin_only` | bool | `true` | 是否只有管理员能教/删 |
 | `qqbot_repeat_teach_match` | str | `exact` | `exact` 整句匹配 / `contains` 包含匹配 |
@@ -145,6 +155,8 @@ data/qqbot_repeat/
 - 教学响应器 `priority=10`、触发响应器 `priority=11`，都 `block=True`：
   命中后不会再走到 `priority=90` 的连续复读，避免「教学 + 复读」双重回复
 - 命令响应器 `priority=5` 先于教学/触发执行，所以教学不会抢 `/本群功能` 等命令
+- 已复读内容用 `OrderedDict` 按群做 LRU 记忆：命中直接丢弃候选，不再跟发；
+  内存态，bot 重启后清空（如需跨重启可后续落盘）
 - 被引用消息优先用适配器填好的 `event.reply`，没有则从 `reply` 段拿
   `message_id` 调 `get_msg` 兜底
 - 发送本地图片用 **base64**（`MessageSegment.image(bytes)`）：
@@ -185,7 +197,7 @@ plugins/qqbot_repeat/
 ## 测试
 
 ```bash
-.venv/bin/python test_repeat.py   # 53 项
-.venv/bin/python test_group.py    # 114 项（复读用例已迁出）
-.venv/bin/python test_meme.py     # 45 项
+.venv/bin/python test_repeat.py   # 61 项
+.venv/bin/python test_group.py    # 126 项（复读用例已迁出）
+.venv/bin/python test_meme.py     # 52 项
 ```
