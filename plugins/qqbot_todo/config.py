@@ -4,8 +4,8 @@
 
 示例（.env.prod）::
 
-    # 「我要做 XXX」等命令在群里是否可用（默认只允许超级用户）
-    qqbot_todo_group_enabled=false
+    # 群聊总闸（还要本群 /开启 待办 才生效）；true = 允许群里用
+    qqbot_todo_group_enabled=true
     # 单条待办提醒
     qqbot_todo_remind_enabled=true
     # 每天早上 9 点把待办私聊推给超级用户
@@ -24,8 +24,8 @@ class Config(BaseModel):
     """QQBot 待办插件配置。"""
 
     qqbot_todo_group_enabled: bool = Field(
-        default=False,
-        description="是否允许在群聊里用「我要做」「/待办」等命令（默认仅超级用户私聊）",
+        default=True,
+        description="群聊总闸：true 时再按群开关控制（/开启 待办）；false 则群里一律不可用",
     )
     qqbot_todo_remind_enabled: bool = Field(
         default=True, description="单条待办到点是否私聊提醒"

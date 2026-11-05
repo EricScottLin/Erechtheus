@@ -347,19 +347,39 @@ async def main() -> None:
     bot = await send("要做 把 pigverse 的 README 补一下")
     check("「要做 X」可单独录入", "记下了" in bot.last(), bot.last())
 
-    # ---------------- 群聊 ----------------
-    bot = await send("/待办", group=True)
-    check("群默认关闭：/待办 不响应", bot.calls == [], str(bot.calls))
-    bot = await send("我要做 群里试试", group=True)
-    check("群默认关闭：我要做 不响应", bot.calls == [], str(bot.calls))
+    # ---------------- 群聊（总闸 + 按群开关，两级） ----------------
+    feats = plugin.module.features
+    group_plugin = nonebot.load_plugin(Path("plugins/qqbot_group"))
+    check("qqbot_group 可加载（按群开关宿主）", group_plugin is not None)
+    feats.ensure_registered()
+    check("待办已注册为按群功能", group_plugin.module.features.resolve_feature("待办") is not None)
+
     cfg.qqbot_todo_group_enabled = True
+    group_plugin.module.features.set_enabled(GROUP, "todo", False)
     bot = await send("我要做 群里试试", group=True)
-    check("群开关打开后可用", "记下了" in bot.last(), bot.last())
+    check("本群未开启：不记任务", "记下了" not in bot.last(), bot.last())
+
+    # /开启 待办 由 qqbot_group 处理：直接调用其 set_enabled 等价
+    group_plugin.module.features.set_enabled(GROUP, "todo", True)
+    bot = await send("我要做 群里试试", group=True)
+    check("本群开启后可用", "记下了" in bot.last(), bot.last())
     src = store.active_tasks()
     check("群来源记录了 group_id", any(t["source"].get("group_id") == GROUP for t in src), str(src[-1].get("source")))
+
     bot = await send("我要做 非超管乱来", user_id=OTHER, group=True)
     check("群里非超管仍被拒并提示", "超级用户" in bot.last(), str(bot.calls))
+
+    # 总闸关掉：即使本群开关开着也不可用
     cfg.qqbot_todo_group_enabled = False
+    bot = await send("我要做 总闸关了", group=True)
+    check("总闸关闭时本群开关无效", "记下了" not in bot.last(), bot.last())
+    cfg.qqbot_todo_group_enabled = True
+
+    # 私聊不受群开关影响
+    group_plugin.module.features.set_enabled(GROUP, "todo", False)
+    bot = await send("我要做 私聊不受影响")
+    check("私聊不受按群开关影响", "记下了" in bot.last(), bot.last())
+    group_plugin.module.features.set_enabled(GROUP, "todo", False)
 
     # ---------------- 每日推送 ----------------
     bot = FakeBot()

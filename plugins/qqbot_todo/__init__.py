@@ -46,7 +46,7 @@ from nonebot.log import logger
 from nonebot.plugin import PluginMetadata
 from nonebot.rule import Rule
 
-from . import store
+from . import features, store
 from .action_parse import Action, parse_command
 from .config import Config, split_hhmm
 from .helpers import (
@@ -123,14 +123,26 @@ def _in_private(event: MessageEvent) -> bool:
 
 
 def _session_ok(event: MessageEvent) -> bool:
-    return _in_private(event) or plugin_config.qqbot_todo_group_enabled
+    """私聊永远可用；群里要「总闸开着 + 本群开关开着」。
+
+    本群开关就是 qqbot_group 的那套：``/开启 待办``、``/关闭 待办``、``/本群功能``。
+    """
+    if _in_private(event):
+        return True
+    if not plugin_config.qqbot_todo_group_enabled:
+        return False
+    return features.is_enabled(event.group_id)
 
 
 def _session_denial(event: MessageEvent) -> Optional[str]:
     if not _is_superuser(event.get_user_id()):
         return "待办功能只开放给机器人超级用户。"
-    if not _session_ok(event):
-        return "群里用待办需要先打开 qqbot_todo_group_enabled=true（默认只支持私聊）。"
+    if _in_private(event):
+        return None
+    if not plugin_config.qqbot_todo_group_enabled:
+        return "待办在群里的总开关关着（qqbot_todo_group_enabled=false），先私聊用，或让运维打开。"
+    if not features.is_enabled(event.group_id):
+        return "本群还没开启待办：发 /开启 待办（管理员），或在 /本群功能 里打开。"
     return None
 
 
