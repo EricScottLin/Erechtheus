@@ -38,6 +38,36 @@ NETEASE_UA = (
 )
 
 
+_GENERIC_PAREN_RE = re.compile(
+    r"[（(\[【][^）)\]】]*(?:版|live|伴奏|remix|翻唱|cover|demo|现场|混音|片段|dj|DJ|女声|男声)[^）)\]】]*[）)\]】]",
+    re.IGNORECASE,
+)
+
+
+def clean_title(title: str) -> str:
+    """去掉「(Live)」「【伴奏版】」这类后缀，提高检索命中率。"""
+    text = _GENERIC_PAREN_RE.sub("", title or "")
+    text = re.sub(r"\s*-\s*(?:live|remix|伴奏|纯音乐).*$", "", text, flags=re.I)
+    return " ".join(text.split()).strip()
+
+
+# LRC 里的制作信息行（不是歌词，不能当「下一句」接出去）
+_CREDIT_RE = re.compile(
+    r"^\s*(作词|作曲|编曲|混音|后期|制作人|录音|母带|监制|出品|策划|"
+    r"lyrics?\s*(by|:)|compos(er|ed)|arrang(er|ed)|produced|mixed|mastered|"
+    r"written by|music by|words by|vocal|歌手|专辑|词|曲)\s*[:：/]",
+    re.IGNORECASE,
+)
+
+
+def is_credit_line(line: str) -> bool:
+    """这行是不是「作词/作曲/Lyrics by」这类制作信息（不能当歌词接）。"""
+    text = (line or "").strip()
+    if not text:
+        return True
+    return bool(_CREDIT_RE.match(text))
+
+
 @dataclass
 class Song:
     """一首歌的元信息（可能还没有歌词）。"""
@@ -49,6 +79,9 @@ class Song:
     duration: float = 0.0
     source: str = "lrclib"
     has_lyrics: bool = False
+    # 歌词本身就是从曲库来的（网易云/本地）——这类命中才算「曲库确认过」，
+    # 用模型猜的歌名再去取歌，只能算「模型说它像某首歌」。
+    from_library: bool = False
 
     @property
     def key(self) -> str:
@@ -63,6 +96,7 @@ class Song:
             "id": self.id, "title": self.title, "artist": self.artist,
             "album": self.album, "duration": self.duration,
             "source": self.source, "has_lyrics": self.has_lyrics,
+            "from_library": self.from_library,
         }
 
     @classmethod
@@ -75,40 +109,32 @@ class Song:
             duration=float(data.get("duration") or 0.0),
             source=str(data.get("source", "lrclib")),
             has_lyrics=bool(data.get("has_lyrics")),
+            from_library=bool(data.get("from_library")),
         )
 
 
-_GENERIC_PAREN_RE = re.compile(
-    r"[（(\[【][^）)\]】]*(?:版|live|伴奏|remix|翻唱|cover|demo|现场|混音|片段|dj|DJ|女声|男声)[^）)\]】]*[）)\]】]",
-    re.IGNORECASE,
-)
-
-
-def clean_title(title: str) -> str:
-    """去掉「(Live)」「【伴奏版】」这类后缀，提高检索命中率。"""
-    text = _GENERIC_PAREN_RE.sub("", title or "")
-    text = re.sub(r"\s*-\s*(?:live|remix|伴奏|纯音乐).*$", "", text, flags=re.I)
-    return " ".join(text.split()).strip()
-
-
 def parse_lrc(text: str) -> list[str]:
-    """LRC → 纯歌词行（去时间戳、去空行、繁体转简体）。"""
+    """LRC → 纯歌词行（去时间戳、去空行、去制作信息、繁体转简体）。"""
     lines: list[str] = []
     for raw in (text or "").splitlines():
         line = re.sub(r"^\[[^\]]*\]", "", raw).strip()
-        if not line:
+        if not line or is_credit_line(line):
             continue
         lines.append(to_simplified(line))
     return lines
 
 
 def parse_plain(text: str) -> list[str]:
-    """纯文本歌词 → 行列表（繁体转简体）。
+    """纯文本歌词 → 行列表（去制作信息、繁体转简体）。
 
     lrclib 上相当多的中文歌词是繁体（《晴天》《小幸运》都是），
     不转简体的话大陆群友打的简体歌词永远匹配不上。
     """
-    return [" ".join(to_simplified(line).split()) for line in (text or "").splitlines() if line.strip()]
+    return [
+        " ".join(to_simplified(line).split())
+        for line in (text or "").splitlines()
+        if line.strip() and not is_credit_line(line)
+    ]
 
 
 @dataclass
@@ -309,17 +335,16 @@ class Netease:
         result = (data or {}).get("result") or {}
         out: list[Song] = []
         for item in (result.get("songs") or [])[: self.limit]:
-            artists = item.get("artists") or []
-            out.append(
-                Song(
-                    id=str(item.get("id", "")),
-                    title=str(item.get("name") or ""),
-                    artist="、".join(str(a.get("name", "")) for a in artists),
-                    album=str((item.get("album") or {}).get("name") or ""),
-                    duration=float(item.get("duration") or 0) / 1000.0,
-                    source="netease",
-                )
+            artists = item.get("artists") or item.get("ar") or []
+            song = Song(
+                id=str(item.get("id", "")),
+                title=str(item.get("name") or ""),
+                artist="、".join(str(a.get("name", "")) for a in artists),
+                album=str((item.get("album") or {}).get("name") or ""),
+                duration=float(item.get("duration") or 0) / 1000.0,
+                source="netease",
             )
+            out.append(song)
         return out
 
     async def lyrics(self, song: Song) -> Optional[list[str]]:
@@ -331,10 +356,12 @@ class Netease:
                 self.LYRIC_URL, params={"id": song.id, "lv": -1, "kv": -1, "tv": -1}
             )
             if resp.status_code != 200:
+                logger.debug(f"[qqbot_lyric] 网易云歌词 HTTP {resp.status_code}")
                 return None
             data = resp.json()
         except Exception as e:  # noqa: BLE001 —— 网易云不稳定，失败不影响主流程
             logger.debug(f"[qqbot_lyric] 网易云歌词失败：{type(e).__name__} {e}")
+            self._broken_until = time.monotonic() + 300
             return None
         if not isinstance(data, dict) or data.get("nolyric"):
             return None
@@ -354,6 +381,7 @@ class LineIndex:
         self.capacity = max(1000, int(capacity))
         self._index: OrderedDict[str, list[tuple[Song, int]]] = OrderedDict()
         self._songs: dict[str, list[str]] = {}  # song.key -> 归一化行列表（按行号）
+        self._display: dict[str, list[str]] = {}  # song.key -> 原始展示行（保留空格）
         self._meta: dict[str, Song] = {}
 
     def __len__(self) -> int:
@@ -369,10 +397,12 @@ class LineIndex:
         每行同时索引「原文归一」和「简体归一」两种形态：lrclib 的歌词大多是
         繁体，群友打简体时两种形态必须都能命中（"愛你孤身走暗巷" ↔ "爱你孤身走暗巷"）。
         """
-        norm_lines = [normalize_variants(line) for line in lines]
+        display = [str(line) for line in lines]
+        norm_lines = [normalize_variants(line) for line in display]
         key = song.key
         self._meta[key] = song
         self._songs[key] = norm_lines
+        self._display[key] = display
         for idx, forms in enumerate(norm_lines):
             for norm in forms:
                 if len(norm) < 3:
@@ -401,8 +431,13 @@ class LineIndex:
         return out
 
     def lines_of(self, song: Song) -> list[str]:
-        """展示用的歌词行（原文形态，繁体歌词显示繁体）。"""
-        return [forms[0] if forms else "" for forms in self._songs.get(song.key, [])]
+        """展示用的歌词行。
+
+        索引里存的是「展示文本」（保留空格/标点），繁体歌词显示繁体；
+        比对用的是另一份归一形态，两者不要混用，否则英文下一句会变成
+        「nightswouldallbeempty」这种没有空格的粘连文本。
+        """
+        return list(self._display.get(song.key, []))
 
     def known(self, song: Song) -> bool:
         return song.key in self._songs
@@ -417,9 +452,9 @@ class LineIndex:
             lines = self._songs.get(key, [])
             if not lines:
                 continue
-            # 只存原文形态（展示/重灌索引时按变体重建）
+            # 只存展示文本（重灌索引时按变体重建比对形态）
             songs.append(
-                {"song": song.to_json(), "lines": [forms[0] for forms in lines][: self._max_store(key)]}
+                {"song": song.to_json(), "lines": self.lines_of(song)[: self._max_store(key)]}
             )
         return {"version": 2, "songs": songs}
 
@@ -535,38 +570,76 @@ class Library:
             return None
 
     async def netease_lyric_lookup(self, keywords: str, text_norm: str = "") -> Optional[tuple[Song, list[str]]]:
-        """按内容搜歌，命中后直接向网易云取歌词（不再依赖 lrclib 是否有这首歌）。
+        """按内容搜歌 → 锁定歌名 → 在歌名上精查歌词。
 
-        与 :meth:`netease_lookup` 的区别：那个只返回歌名，还要回 lrclib 取歌词，
-        lrclib 没收录的歌（如张杰《少年中国说》）就只能报歌名；这里直接拿网易云
-        的歌词，能真正接上。
+        两阶段的原因：网易云「按内容搜」能容忍模糊片段，但返回的第一首经常是
+        翻唱/remix（甚至同名不同歌）；而「按歌名搜」能拿到多首同名版本，
+        用它们做一致性校验（:meth:`netease_consensus`）才不会接错。
         """
-        from .search import best_window, similarity
+        from .search import similarity
 
         songs = await self.netease_candidates(keywords)
         if not songs:
             return None
+
         def rank(song: Song) -> float:
             title = clean_title(song.title)
-            return (
-                -(0.55 - 0.05 * songs.index(song))
-                + (0.4 if text_norm and similarity(title, text_norm) >= 0.5 else 0.0)
-                + (0.2 if text_norm and title and title in text_norm else 0.0)
-            )
+            score = -(0.55 - 0.05 * songs.index(song))
+            if text_norm and similarity(title, text_norm) >= 0.5:
+                score += 0.4
+            if text_norm and title and title in text_norm:
+                score += 0.2
+            return score
 
-        ranked = sorted(songs[:3], key=rank)
-        for song in ranked:
+        for song in sorted(songs[:3], key=rank):
+            title = clean_title(song.title)
+            if not title:
+                continue
+            # 阶段 2：用歌名精查，多个同名版本投票
+            consensus = await self.netease_consensus(title, text_norm)
+            if consensus is None:
+                continue
+            chosen, lines, score = consensus
+            if text_norm and clean_title(song.title) and clean_title(song.title) in text_norm:
+                score = max(score, 0.95)  # 歌名本身就出现在歌词里，强证据
+            if score < 0.6:
+                continue
+            chosen = Song(id=chosen.id, title=chosen.title, artist=chosen.artist,
+                          album=chosen.album, duration=chosen.duration,
+                          source="netease", has_lyrics=True, from_library=True)
+            self.index.add_song(chosen, lines)  # 进本地索引：下次零网络，也能反向取歌词
+            return chosen, lines
+        return None
+
+    async def netease_consensus(self, title: str, text_norm: str) -> Optional[tuple[Song, list[str], float]]:
+        """在「歌名」已知的前提下，找这句歌词属于哪个版本。
+
+        做法：搜「歌名」，取前几首同名的歌，各自取歌词算这句的匹配度，
+        **极值高且第 2~3 名也高**才算数（正版/翻唱的歌词一样，封面曲名不同）。
+        这样既不会被"同名不同歌"骗（《兰亭集序》里也有一句一样的词），
+        也不用依赖网易云返回顺序。
+        """
+        from .search import best_window
+
+        songs = await self.netease_candidates(clean_title(title))
+        if not songs:
+            return None
+        scored: list[tuple[float, Song, list[str]]] = []
+        for song in songs[:3]:
             lines = await self.netease.lyrics(song) if self.netease is not None else None
             if not lines:
                 continue
-            score, _start, _end = best_window(text_norm, lines, 3)
-            if score >= 0.6:  # 找到这首里的对应行，才值得交给上层复核
-                song = Song(id=song.id, title=song.title, artist=song.artist,
-                            album=song.album, duration=song.duration,
-                            source="netease", has_lyrics=True)
-                self.index.add_song(song, lines)  # 进本地索引：下次零网络，也能反向取歌词
-                return song, lines
-        return None
+            score, _s, _e = best_window(text_norm, lines, 3)
+            scored.append((score, song, lines))
+        if not scored:
+            return None
+        scored.sort(key=lambda x: -x[0])
+        best_score, best_song, best_lines = scored[0]
+        # 第二名也很高 → 说明这些同名版本歌词一致，可信
+        runner = scored[1][0] if len(scored) > 1 else best_score
+        if best_score < 0.6:
+            return None
+        return best_song, best_lines, best_score
 
     async def netease_candidates(self, keywords: str) -> list[Song]:
         if self.netease is None:

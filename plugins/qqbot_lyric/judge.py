@@ -33,9 +33,10 @@ KIND_CHAT = "CHAT"
 
 _SYSTEM = "你是歌词识别器。只输出一个 JSON 对象，不要解释、不要 Markdown 代码块。输出前不要分析。"
 _PROMPT = """逐条判断消息类型：
-LYRIC = 一首歌的歌词片段（含副歌、说唱、儿歌、民谣、童谣）
+LYRIC = 一首歌的歌词片段（含副歌、说唱、儿歌、民谣、童谣；中英文都算，
+        例如 "if i had my life without you near me" 属于 LYRIC）
 QUOTE = 台词、诗、名人语录、广告语
-CHAT = 普通群聊闲聊
+CHAT = 普通群聊闲聊（包括英文寒暄、问路、工作安排，如 "hello how are you"）
 直接给出答案，不要逐个分析。
 
 输出格式：{{"items":[{{"i":序号,"type":"LYRIC/QUOTE/CHAT","title":"歌名","artist":"歌手"}}]}}

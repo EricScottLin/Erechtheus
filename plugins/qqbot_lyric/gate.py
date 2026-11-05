@@ -6,7 +6,9 @@
 - **分行**（多人发歌词常常一句一行、连发几条）；
 - **没有话题化的口头语**（「咱们」「你们」+ 时间地点这类开会/吃饭的句子）；
 - **有韵脚**（把整行近似拼音后，相邻行的结尾音相同/相近）；
-- **有歌词语感词**（副歌高频的「我/你/想/爱/心/泪/夜……」密度高）。
+- **有歌词语感词**（副歌高频的「我/你/想/爱/心/泪/夜……」密度高）；
+- **英文也一样**（「if i had my life without you near me」）：是小写完整句子、
+  带 few 个功能词（i/you/my/the/would）、没有问号、不是寒暄或问路。
 
 这里只做**减分**，不做最终判定：分数太低的直接丢（省一次模型调用），
 分数中上的交给模型确认。所有阈值都可以在 :mod:`config` 里调。
@@ -20,6 +22,20 @@ from dataclasses import dataclass, field
 
 from .rhyme import rhyme_key
 from .text import Fragment
+
+@dataclass
+class Shape:
+    """一段候选歌词的版式特征。"""
+
+    text: str
+    score: float = 0.5
+    reasons: list[str] = field(default_factory=list)
+    lines: list[str] = field(default_factory=list)
+
+    def with_lines(self, lines: list[str]) -> "Shape":
+        self.lines = lines
+        return self
+
 
 # 歌词语感高频词（以单字为主 —— 单字不容易误伤普通句子）
 _SONG_WORDS = frozenset(
@@ -44,15 +60,158 @@ _TITLE_INTENT = ("唱首", "来首歌", "放首歌", "点歌", "这首歌", "那
 _QUESTION_TAIL = ("吗", "呢", "吧", "啊", "么", "嘛")
 _PUNCT_END = "。！？!?…"
 
+# ---------------------------------------------------------------- 英文
+# 歌词里极常见的人称/功能词：出现越多越像歌词（日常群聊里也常见，所以权重不高）
+# 只收「意境词」：人称/功能词（i/you/the/and）在英文歌词里也最多，
+# 日常英文里同样满屏都是，放进来只会把 "I will send you the report" 判成歌词。
+_EN_LYRIC_WORDS = frozenset(
+    "love heart feel feeling dream dreams night tonight forever always alone wait "
+    "remember reason believe without empty broken tears soul world life heaven "
+    "baby yeah kiss eyes smile rain sun moon star fire touch hold near away gone "
+    "keep fall breathe smile cry hurt lost fate light dark save wish".split()
+)
+# 英文寒暄 / 实用问句：命中优先当作聊天（hello 在歌里也常见，所以要「整句都像寒暄」才算）
+# 寒暄里常见的虚词/程度词（判断「整句是不是寒暄」时不算内容）
+_EN_FILLER = frozenset("a lot very much too also just really so well ok okay yes no sure".split())
+_EN_GREETINGS = frozenset(
+    "hello hi hey thanks thank please sorry bye goodbye good morning evening night "
+    "how are you what who where when why which is are can could would should will "
+    "do does did dont dont ve ll re m".split()
+)
+_EN_GREETING_PHRASES = (
+    "how are you", "how's it going", "nice to meet you", "thank you", "thanks a lot",
+    "thanks a bunch", "no problem", "that's fine", "sounds good", "got it", "excuse me",
+    "good morning", "good night", "good evening", "see you", "what time",
+    "where is", "how much", "what is", "who is", "can you", "could you",
+    "do you have", "i need to", "i want to", "i think we", "we should",
+)
+# 英文里的聊天/工具语（开会、任务、链接、时间安排）
+_EN_CHAT_WORDS = (
+    "meeting", "deadline", "tomorrow", "today", "tonight", "email", "laptop", "password",
+    "wifi", "project", "schedule", "report", "submit", "okay", "lgtm", "deploy", "build",
+    "bug", "error", "download", "upload", "http", "www", "brb", "afaik", "imo",
+    "failed", "fail", "works", "working", "fix", "fixed", "check", "checked", "send",
+    "sent", "update", "updated", "done", "ready", "waiting", "wait", "ask", "asked",
+    "guys", "please", "thanks", "thx", "morning", "afternoon", "evening",
+)
+_WORD_RE = None
 
-@dataclass
-class Shape:
-    """一段候选歌词的版式特征。"""
 
-    text: str
-    score: float = 0.5
-    reasons: list[str] = field(default_factory=list)
-    lines: list[str] = field(default_factory=list)
+def _words(text: str) -> list[str]:
+    """英文分词（去标点、转小写）。"""
+    import re
+
+    global _WORD_RE
+    if _WORD_RE is None:
+        _WORD_RE = re.compile(r"[a-zA-Z][a-zA-Z']*")
+    return [w.lower().replace("\u2019", "'") for w in _WORD_RE.findall(text or "")]
+
+
+def is_english(text: str, min_ratio: float = 0.8) -> bool:
+    """整句是不是英文（字母占非空白字符的比例足够高）。"""
+    compact = "".join(ch for ch in (text or "") if not ch.isspace())
+    if len(compact) < 4:
+        return False
+    letters = sum(1 for ch in compact if ch.isascii() and ch.isalpha())
+    return letters / len(compact) >= min_ratio
+
+
+def analyze_english(text: str, explicit: bool = False) -> Shape:
+    """英文歌词的版式打分（「像不像一句歌词」）。
+
+    经验信号（都是英文歌词与日常英文的差别）：
+
+    - 歌词几乎没有问号、很少感叹号；
+    - 歌词是小写/句首大写 + 大量人称与功能词（I / you / my / the / would / without）；
+    - 寒暄、问路、任务安排类句子（hello how are you / what time / meeting）更像聊天；
+    - 太长的一段（> 90 词）多半是聊天或复制的资料。
+    """
+    shape = Shape(text=text)
+    words = _words(text)
+    n = len(words)
+    score = 0.5
+    reasons = shape.reasons
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    shape.lines = lines
+
+    if n < 2:
+        score -= 0.4
+        reasons.append("太短-")
+    elif n <= 18:
+        score += 0.12
+        reasons.append("词数像歌词+")
+    elif n <= 30:
+        score += 0.02
+    else:
+        score -= 0.35
+        reasons.append("太长-")
+
+    stripped = text.strip()
+    if stripped.endswith("?"):
+        score -= 0.3
+        reasons.append("问号-")
+    elif stripped.endswith(("!", ".")):
+        score -= 0.1
+        reasons.append("句末标点-")
+    if stripped[:1].islower():
+        score += 0.06
+        reasons.append("小写开头+")
+    if len(lines) >= 2:
+        score += 0.1
+        reasons.append("分行+")
+        if lines[-1].endswith((",", "and", "the", "my", "your")):
+            score += 0.05
+            reasons.append("断句未完成+")
+
+    lyric_hits = sum(1 for w in words if w in _EN_LYRIC_WORDS)
+    density = lyric_hits / max(1, n)
+    if density >= 0.35:
+        score += 0.18
+        reasons.append("歌词语感+")
+    elif density >= 0.22:
+        score += 0.08
+    elif density < 0.1:
+        score -= 0.1
+        reasons.append("歌词语感-")
+
+    low = stripped.lower()
+    if any(p in low for p in _EN_GREETING_PHRASES):
+        score -= 0.28
+        reasons.append("寒暄/问句-")
+    if any(w in _EN_CHAT_WORDS for w in words):
+        score -= 0.15
+        reasons.append("事务词-")
+    # 整句几乎全是寒暄词（hello / thanks / how / are / you / a lot ...）
+    content = [w for w in words if w not in _EN_GREETINGS and w not in _EN_FILLER]
+    if n <= 8 and len(content) <= 1:
+        score -= 0.3
+        reasons.append("整句寒暄-")
+    if any(ch.isdigit() for ch in text):
+        score -= 0.12
+        reasons.append("含数字-")
+
+    if explicit:
+        score += 0.2
+        reasons.append("显式调用+")
+
+    # 英文日常聊天比中文更容易撞上「像歌词」的外形，整体压一档；
+    # 但压完仍 >=「obvious」才允许走免验证路径（见 relay），否则一律要模型确认。
+    score -= 0.08
+    reasons.append("英文降权-")
+    shape.score = max(0.0, min(1.0, score))
+    return shape
+
+
+def apply_language_weight(shape: Shape) -> Shape:
+    """英文片段的整体置信度略降（英文日常聊天比中文更容易撞上「像歌词」的外形）。
+
+    实测英文命中极准（整句歌词搜歌名几乎必中），所以只降一点点，
+    低分时就会落到「不能免验证」那一档。
+    """
+    if is_english(shape.text):
+        shape.score = max(0.0, shape.score - 0.05)
+        shape.reasons.append("英文-")
+    return shape
 
 
 def analyze(frags: list[Fragment], explicit: bool = False) -> Shape:
@@ -64,6 +223,9 @@ def analyze(frags: list[Fragment], explicit: bool = False) -> Shape:
     text = "\n".join(f.text for f in frags if f.text)
     norm = "".join(f.norm for f in frags)
     lines = [f.norm for f in frags if f.norm]
+    # 整句是英文时走英文版式判断（中文字表对英文完全不起作用）
+    if is_english(text):
+        return analyze_english(text, explicit=explicit).with_lines(lines)
     shape = Shape(text=text, lines=lines)
     score = 0.5
     reasons = shape.reasons

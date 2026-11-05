@@ -153,6 +153,19 @@ class Config(BaseModel):
         default=1.5, ge=0.0, le=10.0, description="攒批等待时间（秒，0=不等待），群聊连发时合并成一次请求"
     )
 
+    # ---- 免验证（明显像歌词时先用「按内容搜歌」当证据，省一次模型调用）----
+    qqbot_lyric_verify_without_llm: bool = Field(
+        default=True,
+        description=(
+            "版式明显像歌词时，先用「按内容搜歌」找证据：搜不到就当聊天（不调模型），"
+            "搜到并经曲库逐行比对才接。中英文都适用"
+        ),
+    )
+    qqbot_lyric_quick_verify_timeout: float = Field(
+        default=4.0, ge=1.0, le=20.0,
+        description="免验证路径的超时（秒）；超时则交给模型判定，不当作「不是歌词」",
+    )
+
     # ---- 匹配 ----
     qqbot_lyric_min_score: float = Field(
         default=0.82, ge=0.5, le=1.0, description="片段与歌词行的最低相似度"

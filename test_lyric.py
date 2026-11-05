@@ -202,6 +202,33 @@ class TestText(unittest.TestCase):
         self.assertEqual([f.text for f in combos[0]], ["B句歌词"])
 
 
+class TestEnglish(unittest.TestCase):
+    """英文歌词：能接对，日常英文不打扰（不调模型 / 不接）。"""
+
+    def shape(self, body: str):
+        frag = text.Fragment(text=text.clean_text(body), norm=text.normalize(body), user_id="1", ts=0)
+        return gate.analyze([frag])
+
+    def test_english_detection(self):
+        self.assertTrue(gate.is_english("if i had my life without you near me"))
+        self.assertFalse(gate.is_english("我听见雨滴落在青青草地"))
+
+    def test_english_lyric_like(self):
+        for body in ("if i had my life without you near me", "say yes to heaven say yes to me",
+                     "I love you", "The rain is falling on my window"):
+            self.assertNotEqual(gate.route(self.shape(body)), "skip", body)
+
+    def test_english_chat_skipped(self):
+        for body in ("hello how are you today", "what time is the meeting tomorrow",
+                     "see you tomorrow", "I will send you the report by tomorrow morning",
+                     "lgtm", "thanks a lot", "ok sounds good"):
+            self.assertEqual(gate.route(self.shape(body)), "skip", body)
+
+    def test_credit_lines_not_lyrics(self):
+        lrc = "[00:00.000] 编曲 : Robbie Buchanan\n[00:22.751]The days would all be empty\n[00:01]作词 : Gerry"
+        self.assertEqual(library.parse_lrc(lrc), ["The days would all be empty"])
+
+
 class TestGate(unittest.TestCase):
     def shape(self, body: str) -> gate.Shape:
         frag = text.Fragment(text=text.clean_text(body), norm=text.normalize(body), user_id="1", ts=0)
@@ -400,6 +427,24 @@ class TestEngine(unittest.TestCase):
         second = asyncio.run(engine.handle(1, "我听见雨滴落在青青草地", "u2", ts=110.0))
         self.assertTrue(second.replied)
         self.assertEqual(second.hit.song.title, "小幸运")
+
+    def test_english_relay_without_llm(self):
+        """英文整句：版式像歌词 + 曲库按内容搜到 → 不必等模型就能接。"""
+        lines = ["If I had to live my life without you near me", "The days would all be empty",
+                 "The nights would seem so long"]
+        lib = FakeLibrary({})
+        lib.netease = object()
+        song = library.Song(id="1377130", title="Nothing's Gonna Change My Love for You",
+                            artist="George Benson", source="netease", from_library=True)
+        lib._netease = {"if i had my life without you near me": [song]}
+        lib.lines["Nothing's Gonna Change My Love for You"] = lines
+        lib.songs["Nothing's Gonna Change My Love for You"] = song
+        jd = FakeJudge({})  # 模型一旦被调用就会返回 CHAT
+        engine = relay.RelayEngine(make_config(), lib, jd, state.RelayStore())
+        out = asyncio.run(engine.handle(1, "if i had my life without you near me", "u1", ts=100.0))
+        self.assertTrue(out.replied, out)
+        self.assertEqual(out.hit.next_line, "The days would all be empty")
+        self.assertEqual(jd.calls, [])  # 没有调模型
 
     def test_quoted_fragments_are_joined(self):
         engine, *_ = self.build({"故事的小黄花": "LYRIC"}, {"故事的小黄花": ("晴天", "周杰伦")})

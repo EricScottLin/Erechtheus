@@ -33,10 +33,10 @@ class Hit:
 
     song: Song
     score: float
-    lines: list[str]  # 这首歌的全部歌词行（按行号）
+    lines: list[str]  # 这首歌的全部歌词行（原始展示文本，按行号）
     start: int  # 命中的第一行行号
     end: int  # 命中的最后一行行号
-    how: str = ""  # 命中方式（exact / window / candidate / netease）
+    how: str = ""  # 命中方式（exact / window / candidate / netease / content）
 
     @property
     def next_lines(self) -> list[str]:
@@ -80,8 +80,8 @@ def best_window(text_norm: str, lines: list[str], max_window: int = 3) -> tuple[
 
     返回 ``(score, start, end)``。窗口从 1 行到 ``max_window`` 行。
     """
-    # 歌词行取「简体」形态（lrclib 的歌词多是繁体，群友打的是简体）；
-    # 输入文本同样是简体形态，两边就都对齐了。
+    # 比对用「去空格」的紧凑形态；返回的行号仍然指向**原始歌词行**，
+    # 所以接出来的下一句是带空格的正常英文。
     norm_lines = [normalize(line) for line in lines]
     best = (0.0, 0, 0)
     total = len(norm_lines)
