@@ -91,6 +91,9 @@ HELP = """📚 梗图库（全局共享，仅超级用户可上传）
 /梗 查看 <触发词>        看有哪些图（带序号，回复里附预览）
 /梗 添加 <触发词>        附一张图或回复一张图上传
 /梗 删除 <触发词> <序号>  只删那一张；不带序号则删该触发词下所有图
+/梗 别名 <触发词> <别名>  加别名（双向，两个词共用同一批图）
+/梗 别名 <触发词>         查看该词的别名
+/梗 去别名 <触发词> <别名> 取消别名（图不会删）
 群里整句说出触发词，就会随机发一张对应的图。
 （梗图全局生效，各群用 /开启 梗图 或 /关闭 梗图 控制）"""
 
@@ -109,7 +112,11 @@ async def handle_meme(bot: Bot, event: MessageEvent, arg: Message = CommandArg()
         triggers = library.triggers_of()
         if not triggers:
             await meme_cmd.finish("梗图库还是空的，用 /梗 添加 <触发词> 上传。")
-        lines = [f"· {k}（{len(v)} 张）" for k, v in sorted(triggers.items())]
+        lines = []
+        for k, v in sorted(triggers.items()):
+            aliases = library.aliases_of(k)
+            extra = f"（别名：{'、'.join(aliases)}）" if aliases else ""
+            lines.append(f"· {k}（{len(v)} 张）{extra}")
         await meme_cmd.finish("📚 梗图触发词：\n" + "\n".join(lines))
 
     if sub in ("查看", "详情", "show"):
@@ -171,6 +178,41 @@ async def handle_meme(bot: Bot, event: MessageEvent, arg: Message = CommandArg()
         for data in saved[:4]:
             msg += MessageSegment.image(data)
         await meme_cmd.finish(msg)
+
+    if sub in ("别名", "alias"):
+        parts = trigger.split()
+        if not parts:
+            await meme_cmd.finish("用法：/梗 别名 <触发词> <别名>")
+        main_word = parts[0]
+        alias_word = " ".join(parts[1:]).strip()
+        if not alias_word:
+            current = library.aliases_of(main_word)
+            if not current:
+                await meme_cmd.finish(f"「{main_word}」还没有别名。")
+            await meme_cmd.finish(
+                f"🔗「{main_word}」的别名：{'、'.join(current)}（共用同一批图）"
+            )
+        target, alias, is_new = await library.add_alias(main_word, alias_word)
+        files = library.memes_for(target)
+        note = "已添加" if is_new else "已存在"
+        if target != main_word:
+            note += f"（并入了「{target}」）"
+        await meme_cmd.finish(
+            f"🔗「{main_word}」⇄「{alias_word}」{note}，"
+            f"现在任一个都能触发，共用 {len(files)} 张图。"
+        )
+
+    if sub in ("去别名", "删别名", "unalias"):
+        parts = trigger.split()
+        if len(parts) < 2:
+            await meme_cmd.finish("用法：/梗 去别名 <触发词> <别名>")
+        main_word, alias_word = parts[0], " ".join(parts[1:]).strip()
+        if not await library.remove_alias(main_word, alias_word):
+            await meme_cmd.finish(f"「{main_word}」下没有别名「{alias_word}」。")
+        await meme_cmd.finish(
+            f"🔗 已取消「{main_word}」与「{alias_word}」的关联"
+            f"（图片都还在「{main_word}」下，没有删除）。"
+        )
 
     if sub in ("删除", "清空", "del"):
         if not trigger:
