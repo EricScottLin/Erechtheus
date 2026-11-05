@@ -110,6 +110,12 @@ def _lock_for(group_id: int) -> asyncio.Lock:
     return lock
 
 
+# ---------------------------------------------------------------- 上下文重置
+def reset_group(group_id: int) -> None:
+    """清空某群的全部接龙上下文（测试与 /歌词 重置用）。"""
+    engine.reset_group(group_id)
+
+
 # ---------------------------------------------------------------- 权限 / 开关
 ADMIN_ROLES = frozenset({"owner", "admin"})
 
@@ -390,7 +396,7 @@ async def _startup() -> None:
     logger.info(
         f"[qqbot_lyric] 就绪：lrclib={plugin_config.qqbot_lyric_lrclib_base} "
         f"netease={plugin_config.qqbot_lyric_netease_fallback} "
-        f"llm={'on:' + judge.model if judge.configured else 'off'} "
+        f"llm={'on:' + judge.model if (judge.configured and plugin_config.qqbot_lyric_use_llm) else 'off'} "
         f"索引歌曲={library.index.song_count}"
     )
 

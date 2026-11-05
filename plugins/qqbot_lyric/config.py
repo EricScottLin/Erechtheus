@@ -127,9 +127,17 @@ class Config(BaseModel):
         description="本地歌词行索引最多保存多少行（总量，超了淘汰最久未用的）",
     )
 
-    # ---- 判定（LLM）----
+    # ---- 判定（LLM，默认不用）----
     qqbot_lyric_use_llm: bool = Field(
-        default=True, description="是否用模型判断「像不像歌词」（关闭则只看本地版式）"
+        default=False,
+        description=(
+            "是否用模型判断「像不像歌词」。默认关闭：判定靠本地版式 + 曲库证据，"
+            "实测已足够（常见歌词 12/12 接对、48 句闲聊 0 误接）；打开后只在版式分极低时兜底"
+        ),
+    )
+    qqbot_lyric_llm_fallback_score: float = Field(
+        default=0.3, ge=0.0, le=1.0,
+        description="本地版式分低于该值且免验证路径也没找到证据时是否问模型；0 = 永不问",
     )
     qqbot_lyric_llm_api_base: str = Field(default="", description="模型接口；留空沿用 qqbot_ai")
     qqbot_lyric_llm_api_key: str = Field(default="", description="模型 Key；留空沿用 qqbot_ai")

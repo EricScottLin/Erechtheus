@@ -86,6 +86,8 @@ class RelayEngine:
         self._fragments: dict[int, list[Fragment]] = {}
         # 群 -> {"title": 歌名, "artist": 歌手, "ts": 时间}（模型最近一次给的线索）
         self._meta: dict[int, dict] = {}
+        # 群 -> 最近一次判定的原文（给免验证路径做「保守复核」用）
+        self._last_raw: dict[int, str] = {}
         self.stats = {"seen": 0, "gated": 0, "judged": 0, "replied": 0}
 
     # ------------------------------------------------------------- 片段收集
@@ -98,14 +100,29 @@ class RelayEngine:
         self._fragments[group_id] = [f for f in bucket if ts - f.ts <= horizon][-16:]
         return frag
 
-    def _candidates(self, group_id: int) -> list[list[Fragment]]:
+    def reset_group(self, group_id: int) -> None:
+        """清空某群的全部上下文（接龙状态 + 片段窗口 + 模型线索）。
+
+        只清 relay 状态是不够的：片段窗口里还留着上一段歌词，会被拼进下一条，
+        同一个群连唱两首不同的歌时就会串台。
+        """
+        self.store.reset(group_id)
+        self._fragments.pop(group_id, None)
+        self._meta.pop(group_id, None)
+        self._last_raw.pop(group_id, None)
+
+    def _candidates(self, group_id: int, current: Optional[Fragment] = None) -> list[list[Fragment]]:
         bucket = self._fragments.get(group_id) or []
         nearby = bucket[-self.config.qqbot_lyric_max_segments :]
-        return build_candidates(
+        combos = build_candidates(
             nearby,
             max_segments=self.config.qqbot_lyric_max_segments,
             burst_window=float(self.config.qqbot_lyric_burst_window),
         )
+        if current is not None:
+            # 候选必须以「当前这条」结尾，避免拿旧的片段组合去匹配新消息
+            combos = [c for c in combos if c and c[-1].text == current.text]
+        return combos
 
     def cleanup(self, now: float) -> None:
         """清理过期片段（由定时任务调用，避免内存慢慢涨）。"""
@@ -145,7 +162,7 @@ class RelayEngine:
         if explicit and recent_fragments:
             self._seed(group_id, recent_fragments, now)
         frag = self.add_fragment(group_id, text, user_id, now)
-        candidates = self._candidates(group_id) or [[frag]]
+        candidates = self._candidates(group_id, frag) or [[frag]]
 
         # 1) 版式闸门
         scored: list[tuple[list[Fragment], Shape, str]] = []
@@ -177,11 +194,12 @@ class RelayEngine:
                                        elapsed=time.monotonic() - started)
                     return await self._replied(group_id, user_id, now, hit, None, scored[-1][1], started)
 
-        # 2.5) 免验证路径：版式**很明显**像歌词（中英文都适用）时，先用「按内容搜歌」
-        #      当证据 —— 搜不到所属歌曲就直接当聊天，省掉一次模型调用；
-        #      搜到了也要曲库逐行比对过才算数（曲库才是真相）。
+        # 2.5) 免验证路径（**零 AI**）：只要没被版式判成"明显不像"，就先问曲库——
+        #      「按内容搜歌 + 同名版本一致性校验」比问模型便宜得多（0.5~2 秒 vs 2~4 秒），
+        #      搜不到就当聊天（不调模型），搜到了也要逐行比对过才算数（曲库才是真相）。
         latest_combo, latest_shape, latest_decision = scored[-1]
         quick: object = None
+        self._last_raw[group_id] = " ".join(f.text for f in latest_combo if f.text).strip()
         # a) 本地索引里已经有这句歌词（之前接过这首歌）→ 零网络直接接
         local_hit = self._local_exact_hit(latest_combo)
         if local_hit is not None:
@@ -197,13 +215,12 @@ class RelayEngine:
                 group_id, user_id, now, local_hit, None, latest_shape, started
             )
         if (
-            latest_decision == "obvious"
-            and self.config.qqbot_lyric_verify_without_llm
+            self.config.qqbot_lyric_verify_without_llm
             and getattr(self.library, "netease", None) is not None
         ):
             try:
                 quick = await asyncio.wait_for(
-                    self._quick_verify(latest_combo),
+                    self._quick_verify(latest_combo, latest_shape.score),
                     timeout=float(self.config.qqbot_lyric_quick_verify_timeout),
                 )
             except asyncio.TimeoutError:
@@ -226,10 +243,18 @@ class RelayEngine:
                     group_id, user_id, now, quick_hit, None, latest_shape, started
                 )
 
-        # 3) 问模型（攒批）。只送**最新一条**：几段拼起来会显著拖长模型推理
-        #    （实测 5 条拼一段时 90% 概率空回复），定位阶段再按需拼候选。
+        # 3) 模型兜底（默认关闭）。只有在「本地版式分极低」且免验证路径也没找到证据
+        #    时才问模型；正常情况完全不需要模型（详见 README 的实测数据）。
+        #    只送**最新一条**：几段拼起来会显著拖长模型推理。
+        want_llm = (
+            self.config.qqbot_lyric_use_llm
+            and scored[-1][1].score < float(self.config.qqbot_lyric_llm_fallback_score)
+        )
+        if not want_llm:
+            return Outcome(status="chat", reason="本地无证据（未调模型）",
+                           shape=scored[-1][1], elapsed=time.monotonic() - started)
         judge_texts = [gate_text(scored[-1][1])]
-        verdicts = await self.judge.judge_many(judge_texts) if self.config.qqbot_lyric_use_llm else []
+        verdicts = await self.judge.judge_many(judge_texts)
         self.stats["judged"] += len(judge_texts)
         best: Optional[tuple[list[Fragment], Shape, Verdict]] = None
         verdict = verdicts[0] if verdicts else None
@@ -345,6 +370,35 @@ class RelayEngine:
     def _min_score(self) -> float:
         return float(self.config.qqbot_lyric_min_score)
 
+    def _coverage_ok(self, raw: str, line: str, shape_score: float) -> bool:
+        """保守复核：用户原句的内容词/字要基本都被命中的那行歌词覆盖。
+
+        这条专门用来挡住「只对上一部分就被接」的误判：
+        `i am on my way home` ↔ `I am on my way` 只覆盖了 5/6，
+        而歌词片段的空耳/少了标点通常也能到 0.8 以上。
+        版式分已经很高（>= obvious 档）的不做这层限制，否则会误伤正常歌词。
+        """
+        if shape_score >= 0.5:
+            return True
+        import re as _re
+
+        text = (raw or "").strip()
+        if not text:
+            return True
+        # 英文：词覆盖
+        words = [w for w in _re.findall(r"[a-zA-Z']+", text.lower()) if len(w) > 1]
+        if words and len(words) >= 2:
+            line_words = set(_re.findall(r"[a-zA-Z']+", (line or "").lower()))
+            covered = sum(1 for w in words if w in line_words)
+            return covered / len(words) >= 0.85
+        # 中文：字覆盖
+        chars = [ch for ch in text if "\u4e00" <= ch <= "\u9fff"]
+        if chars:
+            line_chars = set(ch for ch in (line or "") if "\u4e00" <= ch <= "\u9fff")
+            covered = sum(1 for ch in chars if ch in line_chars)
+            return covered / len(chars) >= 0.85
+        return True
+
     def _local_exact_hit(self, frags: list[Fragment]) -> Optional[Hit]:
         """本地歌词索引里的精确命中（之前接过这首歌就零网络可接）。"""
         if not frags:
@@ -355,7 +409,7 @@ class RelayEngine:
                 return hit
         return None
 
-    async def _quick_verify(self, frags: list[Fragment]) -> Optional[Hit]:
+    async def _quick_verify(self, frags: list[Fragment], shape_score: float = 1.0) -> Optional[Hit]:
         """免验证路径：用「按内容搜歌名」当证据，再在曲库里逐行比对。
 
         返回命中结果；返回 ``None`` 表示**没有证据**（这句不属于任何歌），
@@ -377,6 +431,11 @@ class RelayEngine:
         song, lines = found
         score, start, end = best_window(text_norm, lines, 3)
         if score < self._min_score:
+            return None
+        if not self._coverage_ok(keyword, " ".join(lines[start:end + 1]), shape_score):
+            logger.debug(
+                f"[qqbot_lyric] 保守复核未过（用户原句没被充分覆盖），不接：{lines[start]!r}"
+            )
             return None
         return Hit(song=song, score=min(1.0, score), lines=lines, start=start, end=end, how="content")
 

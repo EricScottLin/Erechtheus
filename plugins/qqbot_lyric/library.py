@@ -124,6 +124,30 @@ def parse_lrc(text: str) -> list[str]:
     return lines
 
 
+# 双语权重：压缩形态（去空格）命中一般更可信；原形态命中用来兜住空格差异
+_WEIGHT_CONSENSUS = 0.1
+
+
+def _window_score(text_norm: str, lines: list[str], raw: str = "", compact: str = "") -> float:
+    """一句歌词在某个版本歌词里的得分（多个形态取最高 + 一致性加成）。
+
+    只用压缩形态会把「朋友一生一起走 那些日子不再有」这类基本对上的句子
+    打分偏低（空格位置不同）；只用原形态又容易被「同名词组」骗。
+    所以两边都算，取最高，两边都不错时再给一点加成。
+    """
+    from .search import best_window
+
+    scores = [best_window(text_norm, lines, 3)[0]]
+    if raw:
+        scores.append(best_window(raw, lines, 3)[0])
+    if compact:
+        scores.append(best_window(compact, lines, 3)[0])
+    best = max(scores)
+    if len(scores) >= 2 and sorted(scores)[-2] >= 0.6:
+        best += _WEIGHT_CONSENSUS
+    return min(1.0, best)
+
+
 def parse_plain(text: str) -> list[str]:
     """纯文本歌词 → 行列表（去制作信息、繁体转简体）。
 
@@ -574,13 +598,17 @@ class Library:
 
         两阶段的原因：网易云「按内容搜」能容忍模糊片段，但返回的第一首经常是
         翻唱/remix（甚至同名不同歌）；而「按歌名搜」能拿到多首同名版本，
-        用它们做一致性校验（:meth:`netease_consensus`）才不会接错。
+        用它们的一致性校验（:meth:`netease_consensus`）才不会接错。
+
+        可信判定：最佳版本匹配度高，且「多个同名版本都高」或者「歌名本身出现在
+        这句里」。只有单首勉强匹配时不算（宁可漏接，不能接错）。
         """
         from .search import similarity
 
         songs = await self.netease_candidates(keywords)
         if not songs:
             return None
+        compact = "".join(ch for ch in keywords.lower() if ch.isalnum() or "\u4e00" <= ch <= "\u9fff")
 
         def rank(song: Song) -> float:
             title = clean_title(song.title)
@@ -595,14 +623,12 @@ class Library:
             title = clean_title(song.title)
             if not title:
                 continue
-            # 阶段 2：用歌名精查，多个同名版本投票
-            consensus = await self.netease_consensus(title, text_norm)
+            consensus = await self.netease_consensus(title, text_norm, keywords)
             if consensus is None:
                 continue
-            chosen, lines, score = consensus
-            if text_norm and clean_title(song.title) and clean_title(song.title) in text_norm:
-                score = max(score, 0.95)  # 歌名本身就出现在歌词里，强证据
-            if score < 0.6:
+            chosen, lines, best, runner = consensus
+            title_in_text = bool(text_norm and title and title in text_norm)
+            if not title_in_text and not (best >= 0.75 and runner >= 0.6):
                 continue
             chosen = Song(id=chosen.id, title=chosen.title, artist=chosen.artist,
                           album=chosen.album, duration=chosen.duration,
@@ -611,35 +637,36 @@ class Library:
             return chosen, lines
         return None
 
-    async def netease_consensus(self, title: str, text_norm: str) -> Optional[tuple[Song, list[str], float]]:
+    async def netease_consensus(
+        self, title: str, text_norm: str, raw: str = ""
+    ) -> Optional[tuple[Song, list[str], float, float]]:
         """在「歌名」已知的前提下，找这句歌词属于哪个版本。
 
-        做法：搜「歌名」，取前几首同名的歌，各自取歌词算这句的匹配度，
-        **极值高且第 2~3 名也高**才算数（正版/翻唱的歌词一样，封面曲名不同）。
-        这样既不会被"同名不同歌"骗（《兰亭集序》里也有一句一样的词），
+        搜「歌名」拿前几首同名版本，各自取歌词算这句的匹配度：
+        返回 ``(最佳版本, 歌词, 最佳分, 次佳分)``。次佳分足够高说明这几个
+        同名版本歌词一致（正版/翻唱/伴奏），可信度更高。
+
+        这样既不会被「同名不同歌」骗（《兰亭集序》里也有一句一样的词），
         也不用依赖网易云返回顺序。
         """
-        from .search import best_window
-
         songs = await self.netease_candidates(clean_title(title))
         if not songs:
             return None
+        compact = "".join(
+            ch for ch in (raw or "").lower() if ch.isalnum() or "\u4e00" <= ch <= "\u9fff"
+        )
         scored: list[tuple[float, Song, list[str]]] = []
         for song in songs[:3]:
             lines = await self.netease.lyrics(song) if self.netease is not None else None
             if not lines:
                 continue
-            score, _s, _e = best_window(text_norm, lines, 3)
-            scored.append((score, song, lines))
+            scored.append((_window_score(text_norm, lines, raw, compact), song, lines))
         if not scored:
             return None
         scored.sort(key=lambda x: -x[0])
         best_score, best_song, best_lines = scored[0]
-        # 第二名也很高 → 说明这些同名版本歌词一致，可信
         runner = scored[1][0] if len(scored) > 1 else best_score
-        if best_score < 0.6:
-            return None
-        return best_song, best_lines, best_score
+        return best_song, best_lines, best_score, runner
 
     async def netease_candidates(self, keywords: str) -> list[Song]:
         if self.netease is None:

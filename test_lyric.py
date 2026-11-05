@@ -405,10 +405,14 @@ class TestEngine(unittest.TestCase):
         self.assertEqual(second.status, "cooldown")
 
     def test_unmatched_reports_title(self):
-        engine, *_ = self.build(
+        """曲库没有这首歌时只报歌名，不硬编下一句。"""
+        engine, lib, *_ = self.build(
             {"少年": "LYRIC"},
             {"少年智则国智少年富则国富": ("少年中国说", "张杰")},
+            qqbot_lyric_use_llm=True,
+            qqbot_lyric_llm_fallback_score=1.0,  # 强制走模型兜底分支
         )
+        # 版式分不高（保证会走模型分支），且曲库里没有这首歌
         out = asyncio.run(engine.handle(1, "少年智则国智少年富则国富", "u1", ts=100.0))
         self.assertEqual(out.status, "unmatched")
         self.assertEqual(out.title_hint, "少年中国说")
@@ -445,6 +449,16 @@ class TestEngine(unittest.TestCase):
         self.assertTrue(out.replied, out)
         self.assertEqual(out.hit.next_line, "The days would all be empty")
         self.assertEqual(jd.calls, [])  # 没有调模型
+
+    def test_context_reset_clears_fragments(self):
+        """reset 必须连片段窗口一起清，否则同群连唱两首歌会串台。"""
+        engine, *_ = self.build({"故事": "LYRIC"}, {"故事的小黄花": ("晴天", "周杰伦")})
+        engine.add_fragment(1, "故事的小黄花", "u1", 100.0)
+        self.assertTrue(engine._candidates(1))
+        engine.reset_group(1)
+        self.assertEqual(engine._candidates(1), [])
+        self.assertEqual(engine._fragments, {})
+        self.assertEqual(engine._meta, {})
 
     def test_quoted_fragments_are_joined(self):
         engine, *_ = self.build({"故事的小黄花": "LYRIC"}, {"故事的小黄花": ("晴天", "周杰伦")})
