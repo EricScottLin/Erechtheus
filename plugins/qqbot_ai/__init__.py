@@ -34,6 +34,7 @@ require("nonebot_plugin_localstore")
 from nonebot_plugin_localstore import get_plugin_data_dir  # noqa: E402
 
 from . import text as text_utils  # noqa: E402
+from . import typo  # noqa: E402
 from . import vision  # noqa: E402
 from .agent import Agent  # noqa: E402
 from .config import Config  # noqa: E402
@@ -132,25 +133,11 @@ def _feature_allowed(event: MessageEvent) -> bool:
         return True
 
 
-def _is_superuser(event: MessageEvent) -> bool:
-    return event.get_user_id() in {str(uid) for uid in get_driver().config.superusers}
-
-
-def _private_image(event: MessageEvent) -> bool:
-    """私聊里的图片专供「舞萌二维码绑定」，不进模型（群里仍可看图）。"""
-    return isinstance(event, PrivateMessageEvent) and bool(
-        vision.image_sources(event.get_message())
-    )
-
-
 def _enabled(event: MessageEvent) -> bool:
     if isinstance(event, GroupMessageEvent):
         if not plugin_config.qqbot_ai_group_enabled:
             return False
     elif not plugin_config.qqbot_ai_private_enabled:
-        return False
-    elif plugin_config.qqbot_ai_private_superuser_only and not _is_superuser(event):
-        # 私聊只给 SUPERUSERS：群里照旧，机器人主号私聊可以问
         return False
     return _feature_allowed(event)
 
@@ -278,10 +265,59 @@ async def _answer(event: MessageEvent, question: str, allow_images: bool = True)
     return reply.text
 
 
+# ---------------------------------------------------------------- 命令纠错（thefuck 风格）
+# 打错的命令不该被静默忽略：/签名 -> 「你是不是想用 /签到」
+_typo_notice_at: dict[str, float] = {}
+
+
+def _typo_allowed(event: MessageEvent) -> bool:
+    """纠错提示的总开关 + 同一用户限频。"""
+    cfg = plugin_config
+    if not cfg.qqbot_ai_typo_suggest_enabled or not _enabled(event):
+        return False
+    cooldown = cfg.qqbot_ai_typo_suggest_cooldown_seconds
+    if cooldown <= 0:
+        return True
+    user_id = event.get_user_id()
+    now = time.monotonic()
+    if now - _typo_notice_at.get(user_id, 0.0) < cooldown:
+        return False
+    _typo_notice_at[user_id] = now
+    return True
+
+
+async def _typo_rule(event: MessageEvent) -> bool:
+    """以命令前缀开头、但首段不是已注册命令时，生成纠错提示。
+
+    优先级设为最高（1），比所有正常命令的 matcher 先跑；正常命令会先把
+    ``state`` 里的提示清掉，所以不会误挡。
+    """
+    if not _typo_allowed(event):
+        return False
+    raw = event.get_message().extract_plain_text().strip()
+    if not typo.looks_like_command_typo(raw):
+        return False
+    hint = typo.build_hint(
+        raw,
+        limit=plugin_config.qqbot_ai_typo_suggest_limit,
+    )
+    if not hint:
+        return False
+    event._qqbot_ai_typo_hint = hint  # type: ignore[attr-defined]
+    return True
+
+
+typo_suggest = on_message(rule=Rule(_typo_rule), priority=1, block=True)
+
+
+@typo_suggest.handle()
+async def _handle_typo(event: MessageEvent) -> None:
+    hint = getattr(event, "_qqbot_ai_typo_hint", "")
+    await typo_suggest.finish(hint)
+
+
 # ---------------------------------------------------------------- 唤醒词
 async def _wake_rule(event: MessageEvent) -> bool:
-    if _private_image(event):
-        return False
     if _WAKE_RE is None or not _enabled(event):
         return False
     text = _clean_text(event)
@@ -315,8 +351,6 @@ async def _handle_wake(event: MessageEvent) -> None:
 # ---------------------------------------------------------------- @机器人 / 私聊直接问
 async def _direct_rule(event: MessageEvent) -> bool:
     if not isinstance(event, PrivateMessageEvent) and not event.is_tome():
-        return False
-    if _private_image(event):
         return False
     if not _enabled(event):
         return False

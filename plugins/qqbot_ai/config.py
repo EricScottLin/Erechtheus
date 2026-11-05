@@ -179,9 +179,6 @@ class Config(BaseModel):
     )
     qqbot_ai_group_enabled: bool = Field(default=True, description="群聊是否启用")
     qqbot_ai_private_enabled: bool = Field(default=True, description="私聊是否启用")
-    qqbot_ai_private_superuser_only: bool = Field(
-        default=True, description="私聊仅 SUPERUSERS 可用（群里不受影响）"
-    )
     qqbot_ai_cooldown_seconds: float = Field(
         default=5.0, ge=0.0, le=300.0, description="同一用户两次提问的最小间隔（秒）"
     )
@@ -197,6 +194,23 @@ class Config(BaseModel):
     )
     qqbot_ai_history_expire_minutes: int = Field(
         default=30, ge=1, le=1440, description="历史对话过期时间（分钟）"
+    )
+
+    # ---- 命令纠错（thefuck 风格）----
+    qqbot_ai_typo_suggest_enabled: bool = Field(
+        default=True,
+        description="命令打错时提示相似命令（如 /签名 -> /签到）",
+    )
+    qqbot_ai_typo_suggest_limit: int = Field(
+        default=4, ge=1, le=8, description="最多提示几条相似命令"
+    )
+    qqbot_ai_typo_suggest_min_score: float = Field(
+        default=45.0, ge=0.0, le=300.0,
+        description="相似度阈值，越高越保守（低了会乱推荐）",
+    )
+    qqbot_ai_typo_suggest_cooldown_seconds: float = Field(
+        default=10.0, ge=0.0, le=600.0,
+        description="同一用户两次纠错提示的最小间隔，防止刷屏",
     )
 
     @field_validator(
