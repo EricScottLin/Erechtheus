@@ -35,6 +35,14 @@ driver.register_adapter(OneBotAdapter)
 
 # 3. 本地插件（官方文档：本地插件用 pathlib.Path 加载，字符串会被当作模块名）
 #    https://nonebot.dev/docs/tutorial/create-plugin
+
+# 【必须最先加载】修复「@机器人 + 命令」失效。
+# 它注册的是全局事件预处理钩子（nonebot.message.event_preprocessor），在
+# TrieRule.get_value 之前执行，摘掉指向机器人的 at 段，否则首段是 at 会让
+# 所有 on_command 的 CommandRule 判 False（详见插件内 docstring 与
+# docs/COMMAND_AUDIT_2026-11-05.md 的 P0 条目）。
+nonebot.load_plugin(Path("plugins/qqbot_atcmd_fix"))
+
 nonebot.load_plugin(Path("plugins/qqbot_toolbox"))
 
 # 4. 群聊管理：禁言/踢人/全体禁言/撤回 + 按群功能开关
