@@ -121,6 +121,52 @@ def _clean_text(event: MessageEvent) -> str:
     return text_utils.strip_command_prefix(text, _command_starts(event))
 
 
+# 本插件自己处理的命令：这些要交给下面的 matcher，不算「别人的命令」
+_OWN_COMMANDS = {"ai"}
+
+
+def _is_command_message(event: MessageEvent) -> bool:
+    """这条消息是不是发给**其他插件**的命令。
+
+    典型场景：``@机器人 /开启 todo``、``@机器人 /签到``。这类消息应该由
+    对应插件的命令 matcher 处理，AI 问答不能抢答。
+
+    判定标准（都要满足）：
+
+    1. 去掉 @前缀 后以命令前缀开头（``/``、``!`` 等）；
+    2. 首段命令词**不是任何已注册命令的准确写法**——准确的命令一定交给原插件；
+       拼错的命令由 :mod:`.typo` 的纠错规则接管（那也属于「命令」而非聊天）；
+    3. 剩下的参数不像一句完整的话（命令通常「短 + 参数少」）。
+
+    满足 1、2 却拼错时，返回 True 让 AI 闭嘴，交给纠错规则提示「你是不是想用」。
+    """
+    raw = event.get_message().extract_plain_text().strip()
+    if not raw:
+        return False
+    starts = _command_starts(event)
+    if not any(p and raw.startswith(p) for p in starts):
+        return False
+
+    try:
+        from . import typo
+
+        _, body = typo.split_command(raw, starts)
+        head = body.strip().split()[0] if body.strip() else ""
+        if not head:
+            return False
+        entries = typo.collect_commands()
+        # 准确的命令（含别名）-> 一定是给某个插件的，AI 不参与
+        if head.casefold() in {n.casefold() for e in entries for n in e.all_names}:
+            return True
+        # 拼错的命令：交给纠错规则，AI 同样不参与
+        return typo.looks_like_command_typo(raw) and typo.build_hint(
+            raw, limit=1
+        ) is not None
+    except Exception:  # noqa: BLE001 —— 命令表收集失败时保守放行，不影响正常问答
+        logger.debug("[qqbot_ai] 命令识别失败，按聊天处理")
+        return False
+
+
 def _feature_allowed(event: MessageEvent) -> bool:
     """按群功能开关检查（qqbot_group 未加载时视为开启）。"""
     if not isinstance(event, GroupMessageEvent):
@@ -353,6 +399,9 @@ async def _direct_rule(event: MessageEvent) -> bool:
     if not isinstance(event, PrivateMessageEvent) and not event.is_tome():
         return False
     if not _enabled(event):
+        return False
+    # 「@机器人 /命令」是命令，不是聊天：交给 normal matcher，AI 不能抢
+    if _is_command_message(event):
         return False
     # 纯图片（无文字）也可以；引用了消息也算有内容
     if not _clean_text(event) and not vision.image_sources(event.get_message()):

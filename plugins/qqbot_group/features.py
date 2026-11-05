@@ -21,12 +21,13 @@
 """
 
 import json
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
-from nonebot import get_plugin, on_command
-from nonebot.adapters.onebot.v11 import Bot, GroupMessageEvent, Message
+from nonebot import get_driver, get_plugin, on_command
+from nonebot.adapters.onebot.v11 import Bot, GroupMessageEvent, Message, MessageEvent
 from nonebot.log import logger
 from nonebot.params import CommandArg
 
@@ -253,8 +254,30 @@ async def handle_features(bot: Bot, event: GroupMessageEvent) -> None:
     await feature_cmd.finish("\n".join(lines))
 
 
-async def _toggle_rule(arg: Message = CommandArg()) -> bool:
-    """只有参数能匹配到已注册功能时才响应，避免日常聊天误触。"""
+# 消息里以「/开启 xxx」「/关闭 xxx」开头时才认，避免「开启本群视频解析」这类
+# 自然语言误触；参数认不出来时仍然响应，并在 _do_toggle 里提示可用功能，
+# 而不是静默无回复（用户会以为机器人坏了）。
+_TOGGLE_HEAD_RE = re.compile(r"^/?(?:开启|启用|关闭|禁用)\s*(\S.*)?$")
+
+
+async def _toggle_rule(event: MessageEvent, arg: Message = CommandArg()) -> bool:
+    """是否响应这条开关命令。
+
+    三种情况：
+
+    1. 带命令前缀（``/开启 xxx``）——**一律响应**，参数写错也由 _do_toggle
+       给出「没找到功能 / 可用功能列表」的提示，不能静默无回复；
+    2. 不带前缀但能匹配到已注册功能（``@机器人 关闭本群复读``）——响应，
+       这是文档里写明的自然语言用法；
+    3. 不带前缀且匹配不到功能（``关闭本群电脑``）——不响应，避免吃掉日常聊天。
+
+    注意不能只用 ``CommandArg`` 判参数：rule 阶段拿不到参数时它会判 False，
+    正是 ``/开启 不存在的功能`` 静默的根源。
+    """
+    raw = event.get_message().extract_plain_text().strip()
+    starts = get_driver().config.command_start or {"/"}
+    if any(p and raw.startswith(p) for p in starts):
+        return True
     return resolve_feature(arg.extract_plain_text()) is not None
 
 
@@ -267,7 +290,14 @@ async def _do_toggle(
 
     feature = resolve_feature(arg.extract_plain_text())
     if feature is None:
-        await matcher.finish(f"没找到功能「{arg.strip()}」，发 /本群功能 看看有哪些。")
+        shown = arg.extract_plain_text().strip()
+        if not shown:
+            names = "、".join(_REGISTRY[k].name for k in _ORDER)
+            await matcher.finish(
+                f"要{'开启' if enabled else '关闭'}哪个功能？可用的有：{names}\n"
+                "例如：/开启 待办"
+            )
+        await matcher.finish(f"没找到功能「{shown}」，发 /本群功能 看看有哪些。")
 
     set_enabled(event.group_id, feature.key, enabled)
     flag = "✅ 已开启" if enabled else "❌ 已关闭"
