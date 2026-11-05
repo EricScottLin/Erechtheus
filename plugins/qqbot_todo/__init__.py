@@ -161,13 +161,49 @@ def _has_explicit_prefix(event: Any) -> bool:
     return text.startswith(starts)
 
 
+_CHATTY_TAIL_RE = re.compile(r"^(点|点些|点个|些|个|一件|点儿|点啥)")
+
+
+def _lead_rest(text: str) -> str:
+    """「我要做 <rest>」里的 rest；不像命令返回 ""。"""
+    m = _LEAD_RE.match(text)
+    return m.group("rest").strip() if m else ""
+
+
+def _looks_like_task(rest: str) -> bool:
+    """任务名是否像样：空的不算，「我要做点作业」这种明显是聊天的不算。"""
+    if not rest:
+        return False
+    return not _CHATTY_TAIL_RE.match(rest)
+
+
+def _todo_trigger(event: MessageEvent) -> bool:
+    """这条消息是不是「待办」相关的命令（**只认明确写法**）。
+
+    只认三类：``/待办 …``、``/todo …``、``我要做 / /我要做 …``。
+    绝不能因为「带 reply / 带 @ / 以 / 开头」就当成待办——那会把普通聊天
+    （``/来5张claude``、引用回复的「开户卡在哪一步了？」）全误判成待办命令。
+    """
+    text = _lead_text(event)  # 已剥掉命令前缀
+    if not text:
+        return False
+    if _LEAD_RE.match(text):
+        rest = _lead_rest(text)
+        if _has_explicit_prefix(event):  # /我要做 …、@机器人 我要做 …
+            return bool(rest)  # 只发「/我要做」也给用法提示
+        # 裸消息：「我要做点作业」是聊天，「我要做 修个 bug」才是待办
+        return _looks_like_task(rest)
+    first = text.split(maxsplit=1)[0] if text.split() else ""
+    return first in ("待办", "todo", "TODO", "Todo")
+
+
 def _lead_rule(event: MessageEvent) -> bool:
     return bool(_LEAD_RE.match(_lead_text(event)))
 
 
 def _denied_lead(event: MessageEvent) -> bool:
-    """非超管发来「/我要做 …」「/待办 …」：看一眼就拦下，不做任何事。"""
-    return bool(_LEAD_RE.match(_lead_text(event))) or _has_explicit_prefix(event)
+    """非超管发了待办命令（/待办、/我要做）：温柔拒绝一次，不做任何事。"""
+    return _todo_trigger(event)
 
 
 def _is_not_superuser(event: MessageEvent) -> bool:

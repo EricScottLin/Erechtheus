@@ -351,6 +351,10 @@ async def main() -> None:
     feats = plugin.module.features
     group_plugin = nonebot.load_plugin(Path("plugins/qqbot_group"))
     check("qqbot_group 可加载（按群开关宿主）", group_plugin is not None)
+    # 关键：qqbot_group 的开关会落盘，测试必须重定向到临时目录，
+    # 否则会改写线上 data/qqbot_group/features.json（2026-11-05 被测试清掉过）
+    group_plugin.module.features.DATA_DIR = tmp / "qqbot_group"
+    group_plugin.module.features.DATA_DIR.mkdir(parents=True, exist_ok=True)
     feats.ensure_registered()
     check("待办已注册为按群功能", group_plugin.module.features.resolve_feature("待办") is not None)
 
@@ -368,6 +372,22 @@ async def main() -> None:
 
     bot = await send("我要做 非超管乱来", user_id=OTHER, group=True)
     check("群里非超管仍被拒并提示", "超级用户" in bot.last(), str(bot.calls))
+
+    # 回归：普通聊天绝不能被当成待办命令（2026-11-05 线上误判事故）
+    for chat in ["/来5张claude", "？", "开户卡在哪一步了？", "哈哈哈哈", "我要做点作业"]:
+        bot = await send(chat, user_id=OTHER, group=True)
+        check(f"群友普通消息不误报：{chat}", bot.calls == [], str(bot.calls))
+    # 引用回复 + @ 也不能触发
+    reply_like = Message(
+        [MessageSegment("reply", {"id": "123"}), MessageSegment.at(SUPER), MessageSegment.text(" ？")]
+    )
+    bot = await send(reply_like, user_id=OTHER, group=True)
+    check("引用+@ 的普通消息不误报", bot.calls == [], str(bot.calls))
+    # 真正的待办命令仍然拒绝
+    bot = await send("/待办", user_id=OTHER, group=True)
+    check("非超管 /待办 仍给拒绝提示", "超级用户" in bot.last(), str(bot.calls))
+    bot = await send("/我要做 偷偷加", user_id=OTHER, group=True)
+    check("非超管 /我要做 仍给拒绝提示", "超级用户" in bot.last(), str(bot.calls))
 
     # 总闸关掉：即使本群开关开着也不可用
     cfg.qqbot_todo_group_enabled = False
