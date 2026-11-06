@@ -359,6 +359,22 @@ async def _answer(
 _typo_notice_at: dict[str, float] = {}
 
 
+def _at_others(event: MessageEvent) -> list[str]:
+    """消息里 @ 的其他 QQ 号（排除 @ 自己/机器人）。"""
+    out: list[str] = []
+    self_id = str(getattr(event, "self_id", "") or "")
+    for seg in event.get_message():
+        if seg.type != "at":
+            continue
+        qq = str((seg.data or {}).get("qq") or "")
+        if not qq or qq == "all":
+            continue
+        if qq == self_id:
+            continue
+        out.append(qq)
+    return out
+
+
 def _typo_allowed(event: MessageEvent) -> bool:
     """纠错提示的总开关 + 同一用户限频。"""
     cfg = plugin_config
@@ -381,6 +397,10 @@ async def _typo_rule(event: MessageEvent) -> bool:
     优先级设为最高（1），比所有正常命令的 matcher 先跑；正常命令会先把
     ``state`` 里的提示清掉，所以不会误挡。
     """
+    # 「@别人 /今日老婆」这类是发给别的机器人/用户的命令，不是打错给小E 的命令，
+    # 小E 不能抢答（2026-11-06 实测踩到：@是萌卡喵呢 /今日老婆 被回了「没有这个命令」）。
+    if _at_others(event):
+        return False
     if not _typo_allowed(event):
         return False
     raw = event.get_message().extract_plain_text().strip()
@@ -408,6 +428,9 @@ async def _handle_typo(event: MessageEvent) -> None:
 # ---------------------------------------------------------------- 唤醒词
 async def _wake_rule(event: MessageEvent) -> bool:
     if _WAKE_RE is None or not _enabled(event):
+        return False
+    # 「@别人 小e 帮我看看」是在跟别人说话：除非同时 @ 了 bot，否则不接话
+    if _at_others(event) and not (hasattr(event, "is_tome") and event.is_tome()):
         return False
     text = _clean_text(event)
     m = _WAKE_RE.match(text)
