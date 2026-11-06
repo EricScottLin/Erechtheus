@@ -141,6 +141,54 @@ class TestResolveTargets(unittest.TestCase):
                 self.assertEqual(targets, [])
                 self.assertTrue(error)
 
+    def test_bare_host_becomes_https(self):
+        """/curl google.com 这类裸域名要自动补 https:// 直接测（像真 curl）。"""
+        for host in ("google.com", "api.mistral.ai", "8.8.8.8", "example.com:8443"):
+            targets, error = conn.resolve_targets(host)
+            self.assertEqual(error, "", host)
+            self.assertEqual(len(targets), 1, host)
+            self.assertEqual(targets[0].url, f"https://{host}", host)
+
+    def test_bare_host_case_insensitive(self):
+        targets, error = conn.resolve_targets("GOOGLE.COM")
+        self.assertEqual(error, "")
+        self.assertEqual(targets[0].url, "https://GOOGLE.COM")
+
+    def test_keyword_wins_over_bare_host(self):
+        """预置关键词优先：/curl mistral 仍查预置端点，而不是去测 https://mistral。"""
+        targets, error = conn.resolve_targets("mistral")
+        self.assertEqual(error, "")
+        self.assertEqual({t.key for t in targets}, {"mistral", "mistral-web"})
+
+    def test_plain_words_not_treated_as_host(self):
+        for bad in ("你好", "完记得给我留点 token"):
+            targets, error = conn.resolve_targets(bad)
+            self.assertEqual(targets, [], bad)
+            self.assertTrue(error, bad)
+
+    def test_single_label_only_in_raw_host_mode(self):
+        """裸词（/curl google）只在 raw_host 模式下当主机名，/连通 仍按关键词报错。"""
+        targets, error = conn.resolve_targets("google")
+        self.assertEqual(targets, [])
+        self.assertTrue(error)
+
+        targets, error = conn.resolve_targets("google", raw_host=True)
+        self.assertEqual(error, "")
+        self.assertEqual(targets[0].url, "https://google")
+
+    def test_raw_host_mode_keeps_keyword_and_url_priority(self):
+        targets, error = conn.resolve_targets("mistral", raw_host=True)
+        self.assertEqual({t.key for t in targets}, {"mistral", "mistral-web"})
+
+        targets, error = conn.resolve_targets("https://x.example/a", raw_host=True)
+        self.assertEqual(targets[0].url, "https://x.example/a")
+
+    def test_raw_host_mode_still_rejects_sentences(self):
+        for bad in ("完记得给我留点 token", "你好"):
+            targets, error = conn.resolve_targets(bad, raw_host=True)
+            self.assertEqual(targets, [], bad)
+            self.assertTrue(error, bad)
+
     def test_unknown_keyword(self):
         targets, error = conn.resolve_targets("不存在的服务")
         self.assertEqual(targets, [])

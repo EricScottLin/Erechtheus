@@ -10,6 +10,8 @@
     /curl             同上（别名：/curl /网络检查 /连通性 /netcheck）
     /连通 mistral     按关键词只查匹配的端点
     /连通 <url>       直接测任意地址（只允许 http/https）
+    /curl google.com  裸域名/主机名自动补 https:// 再测（像真 curl 一样）
+    /curl 8.8.8.8:53  带端口也行（主机名:端口 → https://主机名:端口）
 
 安全边界：
 
@@ -62,6 +64,30 @@ DEFAULT_TARGETS: tuple[Target, ...] = (
 # 非 http(s) 一律拒绝；也顺手挡住 shell 元字符（虽然我们不走 shell）
 _URL_RE = re.compile(r"^https?://[^\s\"'`;|&<>]+$", re.IGNORECASE)
 
+# 裸主机名 / 域名 / IP，可带端口：google.com、api.mistral.ai、8.8.8.8、example.com:8443
+# 不含空白与 shell 元字符；至少两段（a.b）或纯 IPv4，避免把「你好」之类当成域名
+_HOST_RE = re.compile(
+    r"^(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,63}(?::\d{1,5})?$"
+    r"|^(?:\d{1,3}\.){3}\d{1,3}(?::\d{1,5})?$",
+    re.IGNORECASE,
+)
+
+# 单段主机名（/curl google）：只在 /curl 这种「就是 curl」的写法下才认，
+# 免得 /连通 里随便一个词都被当成域名去联网
+_LABEL_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?::\d{1,5})?$", re.IGNORECASE)
+
+
+def _as_host_url(query: str, *, allow_single_label: bool = False) -> str:
+    """把裸主机名补成 URL；不是合法主机名就返回空串。
+
+    ``google.com`` → ``https://google.com``；``google.com:8080`` → ``https://google.com:8080``。
+    ``allow_single_label=True`` 时 ``google`` 也算（→ ``https://google``）。
+    """
+    q = query.strip()
+    if _HOST_RE.match(q) or (allow_single_label and _LABEL_RE.match(q)):
+        return f"https://{q}"
+    return ""
+
 
 def _gateway_url() -> str:
     """当前 qqbot_ai 的模型网关地址（读不到就跳过这一项）。"""
@@ -84,10 +110,13 @@ def _materialize(targets: list[Target]) -> list[Target]:
     return out
 
 
-def resolve_targets(query: str) -> tuple[list[Target], str]:
+def resolve_targets(query: str, *, raw_host: bool = False) -> tuple[list[Target], str]:
     """把用户输入解析成要检查的端点列表。
 
     返回 ``(targets, error)``；``error`` 非空表示输入非法，直接把这句话回给用户。
+
+    ``raw_host=True``（由 ``/curl`` 触发）时，查不到预置关键词就把输入当主机名硬测，
+    哪怕只有一段（``/curl google`` → ``https://google``），和真 curl 的直觉一致。
     """
     query = (query or "").strip()
     if not query:
@@ -99,17 +128,25 @@ def resolve_targets(query: str) -> tuple[list[Target], str]:
             return [], "只支持 http:// 或 https:// 开头的地址。"
         return [Target(query, query[:60], query)], ""
 
-    # 按关键词筛
+    # 按关键词筛（先查预置关键词，保证 /curl mistral 仍走预置端点）
     low = query.lower()
     matched = [
         t for t in DEFAULT_TARGETS
         if low in t.key.lower() or low in t.name.lower()
     ]
-    if not matched:
-        names = "、".join(t.key for t in DEFAULT_TARGETS if t.key != "qqbot-gw")
-        return [], f"没找到「{query}」。可用关键词：{names}；也可以直接给 http(s) 地址。"
+    if matched:
+        return _materialize(matched), ""
 
-    return _materialize(matched), ""
+    # 裸主机名/域名/IP：像 curl 一样直接测（/curl google.com）
+    host_url = _as_host_url(query, allow_single_label=raw_host)
+    if host_url:
+        return [Target(host_url, query[:60], host_url)], ""
+
+    names = "、".join(t.key for t in DEFAULT_TARGETS if t.key != "qqbot-gw")
+    return [], (
+        f"没找到「{query}」。可用关键词：{names}；"
+        "也可以直接给 http(s) 地址或域名，如 /curl google.com。"
+    )
 
 
 async def probe(url: str) -> tuple[bool, str]:
@@ -154,7 +191,11 @@ conn_cmd = on_command(
 @conn_cmd.handle()
 async def handle_conn(event: MessageEvent, arg: Message = CommandArg()) -> None:
     """检查到各端点的连通性（在容器内实际发请求）。"""
-    targets, error = resolve_targets(arg.extract_plain_text())
+    # 用 /curl 触发时按「真 curl」的直觉解析（裸词也当主机名）。
+    # 用 get_plaintext() 拿整条消息（含指令名），别用 get_message() 的 str()，
+    # 否则会拼出 "[CQ:...] /curl google" 这种带段前缀的串，判断必然落空。
+    raw_host = event.get_plaintext().lstrip().lower().startswith(("curl", "/curl"))
+    targets, error = resolve_targets(arg.extract_plain_text(), raw_host=raw_host)
     if error:
         await conn_cmd.finish(error)
 
