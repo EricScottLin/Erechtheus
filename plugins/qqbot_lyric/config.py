@@ -5,10 +5,11 @@
     # 总开关 + 接龙手感
     qqbot_lyric_enabled=true
     qqbot_lyric_auto_reply=true          # false = 只识别不接龙（测试用）
-    qqbot_lyric_reply_mode=context       # context=带歌名接；plain=只接下一句
-    qqbot_lyric_cooldown=45              # 同一群两次接龙最小间隔（秒）
+    qqbot_lyric_reply_mode=plain         # plain=只接下一句（默认）；context=再括注歌名
+    qqbot_lyric_cooldown=45              # 同一群同一首歌两次接龙最小间隔（秒）
     qqbot_lyric_relay_window=120         # 接龙后的「连续接」窗口（秒）
     qqbot_lyric_same_song_ttl=900        # 记住当前正在接的歌多久（在窗口外也粘）
+    qqbot_lyric_cross_user_window=90     # 连续接时，上一条别人的消息也能拼进来（秒）
 
     # 曲库（lrclib 为主，网易云搜索兜底）
     qqbot_lyric_source=lrclib,netease
@@ -74,12 +75,14 @@ class Config(BaseModel):
         default=True, description="识别到歌词后是否自动接下一句"
     )
     qqbot_lyric_reply_mode: str = Field(
-        default="context",
-        description="回复样式：context=先接下一句再带歌名歌手；plain=只接下一句",
+        default="plain",
+        description="回复样式：plain=只接下一句（默认，像群友对唱）；context=再接一行「—— 歌名 - 歌手」",
     )
     qqbot_lyric_cooldown: int = Field(
         default=45, ge=0, le=3600,
-        description="同一群两次接龙的最小间隔（秒）",
+        description=(
+            "同一首歌两次接龙的最小间隔（秒）。只挡「同一首」：换歌/对唱接着唱不受影响"
+        ),
     )
     qqbot_lyric_relay_window: int = Field(
         default=120, ge=0, le=3600,
@@ -100,6 +103,13 @@ class Config(BaseModel):
     qqbot_lyric_max_segments: int = Field(
         default=4, ge=1, le=8,
         description="一段歌词最多由几条消息拼成",
+    )
+    qqbot_lyric_cross_user_window: int = Field(
+        default=90, ge=0, le=600,
+        description=(
+            "连续接龙时，上一条**别人**发的消息也能拼进候选的秒数（0=不拼）。"
+            "群友一句一句轮流对唱时，拼上上一条才定位得到「下一句」"
+        ),
     )
 
     # ---- 曲库 ----
@@ -176,7 +186,12 @@ class Config(BaseModel):
 
     # ---- 匹配 ----
     qqbot_lyric_min_score: float = Field(
-        default=0.82, ge=0.5, le=1.0, description="片段与歌词行的最低相似度"
+        default=0.78, ge=0.5, le=1.0,
+        description=(
+            "片段与歌词行的最低相似度。0.78 是实测校准值：群友把歌词库里的三行"
+            "写成一句（「daring I will, be loving you till we're 70」）时得分约 0.79，"
+            "0.82 会漏接；日常闲聊的得分远低于此"
+        ),
     )
     qqbot_lyric_hint_bonus: float = Field(
         default=0.12, ge=0.0, le=0.4, description="模型给出歌名/歌手线索时对该歌的加分"
@@ -192,7 +207,7 @@ class Config(BaseModel):
     @field_validator("qqbot_lyric_reply_mode")
     @classmethod
     def _check_reply_mode(cls, value: str) -> str:
-        mode = (value or "context").strip().lower()
+        mode = (value or "plain").strip().lower()
         if mode not in REPLY_MODES:
             raise ValueError(f"qqbot_lyric_reply_mode 只能是 {sorted(REPLY_MODES)}")
         return mode

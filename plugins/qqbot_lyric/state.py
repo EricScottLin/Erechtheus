@@ -30,6 +30,8 @@ class RelayState:
     group_id: int
     song: Optional[Song] = None  # 正在接的歌
     last_reply_at: float = 0.0  # bot 上次接龙的时间（monotonic）
+    last_song_key: str = ""  # 上次接的是哪首歌（冷却只挡同一首歌）
+    last_hit_key: str = ""  # 上次接的是哪一处（歌#起行-止行；同一句重复发不刷屏）
     last_sender: str = ""  # 上次被接的人（自己唱自己接就没意思了）
     replies: int = 0  # 这一轮接了几次
     recent: list[Song] = field(default_factory=list)  # 最近出现过的歌（新的在前）
@@ -57,10 +59,19 @@ class RelayStore:
             self._states[group_id] = state
         return state
 
-    def cooldown_left(self, group_id: int, now: float, cooldown: float) -> float:
+    def cooldown_left(
+        self, group_id: int, now: float, cooldown: float, song: Optional[Song] = None
+    ) -> float:
+        """还剩多少秒冷却。
+
+        传了 ``song`` 时只算「同一首歌」的冷却：群里换歌/接着对唱不受影响。
+        不传则按「本群上次接龙」算（兼容旧调用）。
+        """
         if cooldown <= 0:
             return 0.0
         state = self.get(group_id)
+        if song is not None and state.last_song_key and state.last_song_key != song.key:
+            return 0.0
         elapsed = now - state.last_reply_at
         return max(0.0, cooldown - elapsed)
 
@@ -79,6 +90,11 @@ class RelayStore:
         if state.song is None or state.song.key != song.key:
             state.song = song
             state.replies = 0
+        # 冷却按「同一首歌」算：换歌（或同一首歌换了另一个版本）立刻可以再接。
+        # 原来按「同一群」算，群里连着对唱时第二句就被冷却挡住，看着像「接不上」。
+        if state.last_song_key != song.key:
+            state.last_song_key = song.key
+            state.last_reply_at = 0.0
         state.last_reply_at = now
         state.last_sender = sender
         state.replies += 1

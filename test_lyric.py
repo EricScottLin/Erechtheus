@@ -398,11 +398,39 @@ class TestEngine(unittest.TestCase):
         self.assertEqual(engine.judge.calls, [])
 
     def test_cooldown_blocks_second_reply(self):
-        engine, *_ = self.build({"从前从前": "LYRIC"}, qqbot_lyric_cooldown=60)
+        """连续接窗口**外**：同一首歌刚接过，冷却期内不重复接（不刷屏）。"""
+        engine, *_ = self.build({"从前从前": "LYRIC"}, qqbot_lyric_cooldown=60,
+                                qqbot_lyric_relay_window=0)
         first = asyncio.run(engine.handle(1, "从前从前有个人爱你很久", "u1", ts=100.0))
         self.assertTrue(first.replied)
         second = asyncio.run(engine.handle(1, "故事的小黄花", "u1", ts=101.0))
         self.assertEqual(second.status, "cooldown")
+        # 冷却期过了，同一首歌照样能接
+        third = asyncio.run(engine.handle(1, "故事的小黄花", "u1", ts=200.0))
+        self.assertTrue(third.replied, third)
+
+    def test_chat_after_relay_not_answered(self):
+        """接过龙之后，群里聊别的不能被拼成歌词接上去（「see you tomorrow」真是一句歌词）。"""
+        engine, lib, jd, _ = self.build({}, qqbot_lyric_cooldown=0)
+        # 走免验证路径（线上就是这样）：按内容搜歌 → 网易云返回这首歌
+        lib.netease = object()
+        lib._netease["刮风这天我试过握着你手"] = [library.Song(id="晴天", title="晴天", artist="周杰伦",
+                                                           source="netease")]
+        first = asyncio.run(engine.handle(1, "刮风这天我试过握着你手", "u1", ts=100.0))
+        self.assertTrue(first.replied, first)
+        # 「see you tomorrow」真是一句歌词（《syt=see you tomorrow》），
+        # 但它自己版式不像歌词 → 不能拼上别人的闲聊之后被接。
+        for body in ("see you tomorrow", "这个bug修好了没", "今天食堂的菜好咸"):
+            out = asyncio.run(engine.handle(1, body, "u2", ts=104.0))
+            self.assertFalse(out.replied, f"{body} 被误接：{out.hit.next_line if out.hit else ''}")
+
+    def test_same_line_repeated_not_spammed(self):
+        """窗口内同一句又发一遍：不重复接（防刷屏）。"""
+        engine, *_ = self.build({}, qqbot_lyric_cooldown=45)
+        first = asyncio.run(engine.handle(1, "从前从前有个人爱你很久", "u1", ts=100.0))
+        self.assertTrue(first.replied)
+        again = asyncio.run(engine.handle(1, "从前从前有个人爱你很久", "u2", ts=103.0))
+        self.assertEqual(again.status, "cooldown")
 
     def test_unmatched_reports_title(self):
         """曲库没有这首歌时只报歌名，不硬编下一句。"""
@@ -472,6 +500,137 @@ class TestEngine(unittest.TestCase):
         hit = search.Hit(song=lib.songs["晴天"], score=1.0, lines=QINGTIAN, start=4, end=4)
         self.assertEqual(relay.render(hit, "plain"), "但故事的最后你好像还是说了拜拜")
         self.assertNotIn("晴天", relay.render(hit, "plain"))
+
+    def test_render_default_has_no_song_name(self):
+        """默认只接下一句，不带「（—— 歌名 - 歌手）」署名。"""
+        lib = FakeLibrary({"晴天|周杰伦": QINGTIAN})
+        hit = search.Hit(song=lib.songs["晴天"], score=1.0, lines=QINGTIAN, start=4, end=4)
+        self.assertEqual(relay.render(hit), "但故事的最后你好像还是说了拜拜")
+        self.assertNotIn("——", relay.render(hit))
+        self.assertNotIn("周杰伦", relay.render(hit))
+        self.assertIn("—— 晴天 - 周杰伦", relay.render(hit, "context"))
+
+    def test_credit_line_never_replied(self):
+        """群友把「—— 歌名 - 歌手」署名行单独发出来，不能被当成歌词接。"""
+        engine, lib, jd, _ = self.build({})
+        for body in ("（—— Thinking out Loud - Ed Sheeran）", "—— 晴天 - 周杰伦"):
+            self.assertFalse(text.is_noise(body))  # 不是噪音，只是「不是歌词」
+            out = asyncio.run(engine.handle(1, body, "u1", ts=100.0))
+            self.assertFalse(out.replied, body)
+        self.assertEqual(jd.calls, [])
+
+    def test_credit_line_stripped_from_message(self):
+        """「下一句 + 署名」整段复制回来时，署名行要剔掉、歌词照接。"""
+        engine, lib, jd, _ = self.build({})
+        body = "刮风这天我试过握着你手\n（—— 晴天 - 周杰伦）"
+        out = asyncio.run(engine.handle(1, text.lyric_lines(body)[0], "u1", ts=100.0))
+        self.assertTrue(out.replied, out)
+        self.assertEqual(out.hit.song.title, "晴天")
+        self.assertEqual(out.hit.next_line, "但偏偏雨渐渐大到我看你不见")
+
+
+# Thinking Out Loud（网易云真实歌词：一句歌词被拆成三行）
+TOL = [
+    "When your legs don't work like they used to before",
+    "And I can't sweep you off of your feet",
+    "Will your mouth still remember the taste of my love",
+    "Will your eyes still smile from your cheeks",
+    "And darlin' I will",
+    "Be lovin' you",
+    "Till we're seventy",
+    "Baby my heart",
+    "Could still fall as hard",
+    "At twenty three",
+]
+
+
+class TestRelayContinuation(unittest.TestCase):
+    """连续对唱：一句一句轮流发，每一步都要接得上（2026-11-06 线上问题回归）。"""
+
+    def build(self, lines=None, **cfg):
+        body = lines or TOL
+        # 按内容搜歌 → 网易云返回这首歌（线上就是这样：整句搜「Thinking Out Loud」）
+        lib = FakeLibrary({"Thinking out Loud|Ed Sheeran": body},
+                          netease={q: [library.Song(id="1", title="Thinking out Loud",
+                                                    artist="Ed Sheeran", source="netease")]
+                                   for q in (
+                                       "daring I will, be loving you till we're 70",
+                                       "Baby my heart",
+                                       "Could still fall as hard",
+                                       "And darlin' I will, Be lovin' you, Till we're seventy,",
+                                   )})
+        jd = FakeJudge({}, {})  # 模型一旦被调用就返回 CHAT：验证全程不需要模型
+        store = state.RelayStore()
+        cfg.setdefault("qqbot_lyric_cooldown", 0)
+        engine = relay.RelayEngine(make_config(**cfg), lib, jd, store)
+        return engine, lib, jd
+
+    def test_partial_line_matches_multi_line(self):
+        """用户把三行歌词写成一句（逗号分隔），也要能对上（0.82 阈值）。"""
+        score, start, end = search.best_window(
+            text.normalize("daring I will, be loving you till we're 70"), TOL, 3
+        )
+        self.assertGreaterEqual(score, Config().qqbot_lyric_min_score)
+        self.assertEqual((start, end), (4, 6))
+
+    def test_partial_window_requires_line_order(self):
+        """输入各段在歌词里的行号必须递增，否则（拼了别人的话）不算命中。"""
+        norm = "\n".join([text.normalize("Till we're seventy"), text.normalize("And darlin' I will")])
+        score, start, end = search.best_window(norm, TOL, 3)
+        self.assertLess(score, 0.82)
+
+    def test_first_line_answered(self):
+        engine, _, jd = self.build()
+        out = asyncio.run(engine.handle(1, "daring I will, be loving you till we're 70", "u1", ts=100.0))
+        self.assertTrue(out.replied, out)
+        self.assertEqual(out.hit.song.title, "Thinking out Loud")
+        self.assertEqual(out.hit.next_line, "Baby my heart")
+        self.assertEqual(jd.calls, [])
+
+    def test_continuous_singing_across_users(self):
+        """A 唱一句 → bot 接 → B 接着唱 → bot 必须马上接（不能被冷却挡住）。"""
+        engine, _, jd = self.build(qqbot_lyric_cooldown=45)
+        first = asyncio.run(engine.handle(1, "daring I will, be loving you till we're 70", "u1", ts=100.0))
+        self.assertTrue(first.replied, first)
+        self.assertEqual(first.hit.next_line, "Baby my heart")
+        # 5 秒后另一个人接着唱（同一个人自己接自己，也要能接）
+        second = asyncio.run(engine.handle(1, "Baby my heart", "u2", ts=105.0))
+        self.assertTrue(second.replied, second)
+        self.assertEqual(second.hit.next_line, "Could still fall as hard")
+        third = asyncio.run(engine.handle(1, "Could still fall as hard", "u1", ts=110.0))
+        self.assertTrue(third.replied, third)
+        self.assertEqual(third.hit.next_line, "At twenty three")
+        self.assertEqual(jd.calls, [])
+
+    def test_second_line_alone_continues(self):
+        """第二句单独发（上一句是别人发的、bot 刚接过）也要接得上。"""
+        engine, _, _ = self.build(qqbot_lyric_cooldown=45)
+        first = asyncio.run(engine.handle(1, "daring I will, be loving you till we're 70", "u1", ts=100.0))
+        self.assertTrue(first.replied, first)
+        second = asyncio.run(engine.handle(1, "And darlin' I will, Be lovin' you, Till we're seventy,", "u2", ts=106.0))
+        self.assertTrue(second.replied, second)
+        self.assertEqual(second.hit.next_line, "Baby my heart")
+
+    def test_same_song_repeat_still_cooled(self):
+        """同一首歌里重复发同一句，冷却仍然生效（不刷屏）。"""
+        engine, _, _ = self.build(qqbot_lyric_cooldown=45)
+        first = asyncio.run(engine.handle(1, "Baby my heart", "u1", ts=100.0))
+        self.assertTrue(first.replied, first)
+        again = asyncio.run(engine.handle(1, "Baby my heart", "u2", ts=101.0))
+        self.assertEqual(again.status, "cooldown")
+
+    def test_other_song_not_blocked_by_cooldown(self):
+        """冷却只挡同一首歌：换一首歌接着唱不受影响。"""
+        lib = FakeLibrary({"Thinking out Loud|Ed Sheeran": TOL,
+                           "小幸运|田馥甄": ["我听见雨滴落在青青草地", "我听见远方下课钟声响起"]},
+                          netease={"Baby my heart": [library.Song(id="1", title="Thinking out Loud",
+                                                                  artist="Ed Sheeran", source="netease")]})
+        engine = relay.RelayEngine(make_config(qqbot_lyric_cooldown=45), lib, FakeJudge({}), state.RelayStore())
+        first = asyncio.run(engine.handle(1, "Baby my heart", "u1", ts=100.0))
+        self.assertTrue(first.replied, first)
+        second = asyncio.run(engine.handle(1, "我听见雨滴落在青青草地", "u2", ts=103.0))
+        self.assertTrue(second.replied, second)
+        self.assertEqual(second.hit.song.title, "小幸运")
 
 
 if __name__ == "__main__":

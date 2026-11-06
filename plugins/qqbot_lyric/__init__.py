@@ -4,8 +4,9 @@
 
 - **自然触发**：群友随手打一句「从前从前有个人爱你很久」，bot 认出是《晴天》，
   就接「但故事的最后你好像还是说了拜拜」；@机器人 或引用某条消息时同样会响应；
-- **连续接**：接过之后 2 分钟内，别人再发同首歌的某一句，bot 继续往下接，
-  不会突然换歌；
+- **连续接**：接过之后 2 分钟内，别人（哪怕是另一个人）再发同首歌的某一句，
+  bot 继续往下接，不会突然换歌；接的时候**只发下一句**，不带歌名；
+- **对唱**：一句一句轮流发也能接 —— 窗口内会把上一条（别人发的）拼进候选；
 - **查歌**：``/什么歌 <歌词片段>``（别名 ``/歌词``）直接回答这是哪首歌；
 - **按群开关**：默认关闭，群管发 ``/开启 歌词`` 打开（``/本群功能`` 查看）。
 
@@ -40,7 +41,7 @@ from .relay import RelayEngine, render, render_title_only  # noqa: E402
 from .search import SearchContext, search  # noqa: E402
 from .state import RelayStore  # noqa: E402
 from .store import IndexStore  # noqa: E402
-from .text import clean_text, is_noise  # noqa: E402
+from .text import clean_text, is_noise, lyric_lines  # noqa: E402
 
 __plugin_meta__ = PluginMetadata(
     name="歌词接龙",
@@ -146,7 +147,11 @@ async def _relay_rule(event: GroupMessageEvent) -> bool:
 
 
 def _text_of(event: MessageEvent) -> str:
-    """取消息里的文字（去掉 @ 段、回复段），非纯文本返回空串。"""
+    """取消息里的文字（去掉 @ 段、回复段），非纯文本返回空串。
+
+    「—— 歌名 - 歌手」这类署名行会被剔掉：群友常把 bot 接的那句连同署名
+    整段复制回来，署名混进歌词里会让匹配失败。
+    """
     segs = [s for s in event.get_message() if s.type not in ("at", "reply", "face")]
     if not segs:
         return ""
@@ -155,7 +160,10 @@ def _text_of(event: MessageEvent) -> str:
     raw = "".join(str(s.data.get("text") or "") for s in segs).strip()
     if is_noise(raw):
         return ""
-    return clean_text(raw)
+    lines = lyric_lines(raw)
+    if not lines:
+        return ""
+    return "\n".join(lines)
 
 
 async def _quoted_text(bot: Bot, event: MessageEvent) -> str:

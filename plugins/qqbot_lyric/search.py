@@ -79,6 +79,15 @@ def best_window(text_norm: str, lines: list[str], max_window: int = 3) -> tuple[
     """在一首歌的歌词里滑窗，找与 ``text_norm`` 最像的连续行。
 
     返回 ``(score, start, end)``。窗口从 1 行到 ``max_window`` 行。
+
+    评分要点（这两条是「接不上」的主要历史原因，改动前务必跑单测）：
+
+    - **部分命中**：群友常把一句歌词按逗号拆成几行发，或者只记得半句。
+      所以除了「整段窗口 vs 整段输入」，还算「窗口里连续几行 vs 输入里连续几段」，
+      取最高分。例：``daring I will, be loving you till we're 70`` 对上
+      ``And darlin' I will`` / ``Be lovin' you`` / ``Till we're seventy`` 三行。
+    - **行序校验**：输入里各段在歌词里的行号必须**严格递增**（群友按顺序唱），
+      否则「拼了别人的话」也能凑出高分。
     """
     # 比对用「去空格」的紧凑形态；返回的行号仍然指向**原始歌词行**，
     # 所以接出来的下一句是带空格的正常英文。
@@ -99,7 +108,138 @@ def best_window(text_norm: str, lines: list[str], max_window: int = 3) -> tuple[
             score = similarity(text_norm, chunk)
             if score > best[0]:
                 best = (score, start, start + size - 1)
+    partial = _partial_window(text_norm, norm_lines, max_window)
+    if partial is not None and partial[0] > best[0]:
+        best = partial
+    # 多段输入（群友分几行发）时，整段窗口相似度会被「分行位置不同」拉低
+    # （三行写成一句、或者把上一句也带上了）。这时**行序对得上**才是关键证据：
+    # 按「输入有多少字按顺序出现在窗口里」折算一次，避免该接的接不上。
+    if "\n" in text_norm and best[0] > 0:
+        chunk = "".join(norm_lines[best[1] : best[2] + 1])
+        if chunk:
+            covered = _coverage(chunk, text_norm)
+            boosted = 0.6 * best[0] + 0.4 * covered
+            if boosted > best[0]:
+                best = (min(1.0, boosted), best[1], best[2])
     return best
+
+
+def _coverage(chunk: str, text: str) -> float:
+    """输入里有多大比例的字，按顺序出现在歌词片段里（LCS / 输入长度）。"""
+    if not text:
+        return 0.0
+    n, m = len(text), len(chunk)
+    if n * m > 400_000:  # 太长就不算（歌词行不会这么长）
+        return 0.0
+    prev = [0] * (m + 1)
+    for i in range(1, n + 1):
+        cur = [0] * (m + 1)
+        ch = text[i - 1]
+        for j in range(1, m + 1):
+            cur[j] = prev[j - 1] + 1 if ch == chunk[j - 1] else max(prev[j], cur[j - 1])
+        prev = cur
+    return prev[m] / n
+
+
+def _segment_offsets(parts: list[str]) -> list[int]:
+    """各段在拼接文本里的起始下标。"""
+    out: list[int] = []
+    pos = 0
+    for part in parts:
+        out.append(pos)
+        pos += len(part)
+    return out
+
+
+def _partial_window(
+    text_norm: str, norm_lines: list[str], max_window: int
+) -> Optional[tuple[float, int, int]]:
+    """「部分命中」：输入里连续几段 ≈ 歌词里连续几行（允许漏掉头尾）。
+
+    逐行滑窗（行号窗口 ``[start, end]``，最多 ``max_window`` 行），
+    把输入切成「落在该行里」的若干段（段边界 = 输入里的分行位置），
+    行号严格递增的连续行才算一次命中；得分 = 覆盖到的输入字数 / 输入总字数
+    × 相似度均值 × 跳行折扣。返回 ``(score, start, end)``，没有命中返回 ``None``。
+
+    注意这里的 ``end`` 是**最后一段对上的那一行**，不是窗口末尾：
+    接出来的「下一句」必须是群友刚唱完那句之后的那一行，否则会跳过好几行。
+    """
+    if not text_norm:
+        return None
+    parts = text_norm.split("\n")
+    if len(parts) < 2:
+        return None
+    offsets = _segment_offsets(parts)
+    best: Optional[tuple[float, int, int]] = None
+    total = len(norm_lines)
+    for start in range(total):
+        end = min(total - 1, start + max_window - 1)
+        line_of: list[int] = []
+        ok = True
+        for idx, part in enumerate(parts):
+            lo, hi = offsets[idx], offsets[idx] + len(part)
+            if not part:
+                line_of.append(-1)
+                continue
+            found = -1
+            for line_idx in range(start, end + 1):
+                line = norm_lines[line_idx]
+                if not line:
+                    continue
+                if _overlaps(line, text_norm, lo, hi) and (not line_of or line_idx > line_of[-1]):
+                    found = line_idx
+                    break
+            line_of.append(found)
+            if found < 0:
+                ok = False
+                break
+        if not ok:
+            continue
+        # 合并「同一行里的相邻段」，逐行算相似度
+        groups: list[tuple[int, str]] = []
+        for idx, line_idx in enumerate(line_of):
+            if line_idx < 0:
+                continue
+            if groups and groups[-1][0] == line_idx:
+                groups[-1] = (line_idx, groups[-1][1] + parts[idx])
+            else:
+                groups.append((line_idx, parts[idx]))
+        if len(groups) < 2:
+            continue
+        covered = sum(len(text) for _, text in groups)
+        if covered < 0.6 * len(text_norm):
+            continue
+        sims = [similarity(text, norm_lines[line_idx]) for line_idx, text in groups]
+        avg = sum(sims) / len(sims)
+        first, last = groups[0][0], groups[-1][0]
+        score = (covered / len(text_norm)) * avg * _span_penalty(last - first + 1, len(groups))
+        if best is None or score > best[0]:
+            best = (score, first, last)
+    return best
+
+
+def _span_penalty(span: int, used: int) -> float:
+    """命中区间里有没对上的行时打折（跳得越多越不可信）。"""
+    if span <= used:
+        return 1.0
+    return max(0.6, used / span)
+
+
+def _overlaps(line: str, text: str, lo: int, hi: int, min_len: int = 3) -> bool:
+    """输入里 ``text[lo:hi]`` 这一段，是否和歌词行 ``line`` 有足够长的公共片段。
+
+    群友的分行位置和歌词库的分行位置经常对不上（「daring I will, be loving you
+    till we're 70」在一行里，歌词库里是三行），所以不能要求「整段落在某一行内」，
+    只要这一行里存在一段连续重叠（>= ``min_len`` 个字）就算这一段归这一行。
+    """
+    span = text[lo:hi]
+    if not span:
+        return False
+    for size in range(min(len(span), len(line)), min_len - 1, -1):
+        for i in range(0, len(span) - size + 1):
+            if span[i : i + size] in line:
+                return True
+    return False
 
 
 @dataclass

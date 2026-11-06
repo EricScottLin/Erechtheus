@@ -91,13 +91,19 @@
 
 ## 接龙手感（:mod:`relay` / :mod:`state`）
 
+- **只接下一句，不带歌名**（默认 `reply_mode=plain`）：像群友在对唱，不科普歌名；
 - **连续接窗口**（默认 120 秒）：bot 接过一次后，别人接着唱同一首，直接在同一首歌里
   找位置往下接，不再等模型 —— 更像真的在对唱；
+- **跨人对唱**：窗口内上一条**别人**发的歌词也会拼进候选（默认 90 秒），
+  一句一句轮流发也能定位到「下一句」；
+- **窗口内不挡冷却**：连续对唱时每一句都是新的，冷却只在窗口外生效，
+  窗口内只挡「同一句又发一遍」（防刷屏）；
 - 窗口外但 15 分钟内出现过的那首，会作为**置顶候选**优先匹配（不轻易换歌）；
 - **换歌不会被锁死**：窗口内如果这句在某首歌里找不到，会退回完整判定；
-  模型也猜不出时才在这首里再试一次；
-- 同一群 45 秒内最多接一次（防止刷屏）；
-- 曲库接不上时只说「这句像《X》的歌词，但我没查到下一句」，**不编造**。
+- 曲库接不上时只说「这句像《X》的歌词，但我没查到下一句」，**不编造**；
+- **不把闲聊拼成歌词**：当前这条自己不像歌词时，不会拼上下文去匹配
+  （「see you tomorrow」真是一句歌词，但群里说这句是聊天）；
+- 「—— 歌名 - 歌手」这类署名行会被自动剔掉（群友常把 bot 接的那句连署名一起复制回来）。
 
 ## 配置
 
@@ -107,9 +113,10 @@
 # 开关
 qqbot_lyric_enabled=true          # 总开关（按群开关另算，默认关闭）
 qqbot_lyric_auto_reply=true       # false = 只识别不接（测试用）
-qqbot_lyric_reply_mode=context    # context=接下一句 + 括注歌名；plain=只接下一句
-qqbot_lyric_cooldown=45           # 同群两次接龙最小间隔（秒）
+qqbot_lyric_reply_mode=plain      # plain=只接下一句（默认）；context=再括注「—— 歌名 - 歌手」
+qqbot_lyric_cooldown=45           # 同一首歌两次接龙最小间隔（秒，窗口外生效）
 qqbot_lyric_relay_window=120      # 连续接窗口（秒）
+qqbot_lyric_cross_user_window=90  # 窗口内上一条别人的消息也能拼进来（秒）
 
 # 曲库
 qqbot_lyric_source=lrclib,netease
@@ -124,7 +131,7 @@ qqbot_lyric_llm_model=
 qqbot_lyric_llm_timeout_seconds=15
 qqbot_lyric_llm_min_chars=5
 qqbot_lyric_llm_max_chars=60
-qqbot_lyric_min_score=0.82
+qqbot_lyric_min_score=0.78       # 实测校准：三行歌词写成一句时约 0.79
 
 # 免验证（明显像歌词时先用「按内容搜歌」当证据，省一次模型调用）
 qqbot_lyric_verify_without_llm=true

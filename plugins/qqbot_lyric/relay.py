@@ -5,8 +5,10 @@
 
 一次处理的决策顺序：
 
-1. 本地版式闸门：明显不像（太短/太长/事务性口语）直接放弃，不调模型；
-2. 正在「连续接」窗口内 → 先只在这首歌里找；找到就接（不再问模型，省时间）；
+1. 本地版式闸门：**当前这条自己**明显不像（太短/太长/事务性口语）直接放弃，
+   不调模型、也不拼上下文（否则闲聊会被拼成「像歌词」而误接）；
+2. 正在「连续接」窗口内 → 先只在这首歌里找（候选从长到短：拼上上一条才定位得到
+   「下一句」）；找到就接（不再问模型，省时间）；只挡「同一句重复发」；
 3. 否则攒批问模型「像不像歌词 + 猜歌名」；
 4. 是歌词 → :mod:`search` 定位到具体某首歌某一行 → 返回下一句；
 5. 曲库接不上但模型确定是歌词 → 只报歌名（「像是 X - Y 的歌词」），不硬编下一句。
@@ -55,18 +57,20 @@ class Outcome:
         return self.status == "replied"
 
 
-def render(hit: Hit, mode: str = "context") -> str:
+def render(hit: Hit, mode: str = "plain") -> str:
     """把命中结果渲染成要发出去的文本。
 
-    ``context``：先接下一句，下一行括注「—— 歌名 - 歌手」，像群友在对唱；
-    ``plain``：只接下一句。
+    ``plain``（默认）：只接下一句，像个群友在对唱 —— **不带歌名**。
+    群友要的是接着唱，不是被科普歌名；署名行还会被下一个人复制回来，
+    混进歌词里影响匹配。
+    ``context``：下一句 + 括注「—— 歌名 - 歌手」（想显摆曲库时用）。
     """
     body = hit.next_line
     if not body:
         return ""
-    if mode == "plain":
-        return body
-    return f"{body}\n（—— {hit.song.label}）"
+    if mode == "context":
+        return f"{body}\n（—— {hit.song.label}）"
+    return body
 
 
 def render_title_only(title: str, artist: str) -> str:
@@ -111,13 +115,19 @@ class RelayEngine:
         self._meta.pop(group_id, None)
         self._last_raw.pop(group_id, None)
 
-    def _candidates(self, group_id: int, current: Optional[Fragment] = None) -> list[list[Fragment]]:
+    def _candidates(
+        self,
+        group_id: int,
+        current: Optional[Fragment] = None,
+        cross_user_window: float = 0.0,
+    ) -> list[list[Fragment]]:
         bucket = self._fragments.get(group_id) or []
         nearby = bucket[-self.config.qqbot_lyric_max_segments :]
         combos = build_candidates(
             nearby,
             max_segments=self.config.qqbot_lyric_max_segments,
             burst_window=float(self.config.qqbot_lyric_burst_window),
+            cross_user_window=cross_user_window,
         )
         if current is not None:
             # 候选必须以「当前这条」结尾，避免拿旧的片段组合去匹配新消息
@@ -162,11 +172,26 @@ class RelayEngine:
         if explicit and recent_fragments:
             self._seed(group_id, recent_fragments, now)
         frag = self.add_fragment(group_id, text, user_id, now)
-        candidates = self._candidates(group_id, frag) or [[frag]]
+        # 连续接龙时，上一条（哪怕是别人发的）是定位「下一句」的关键上下文，
+        # 所以窗口内允许跨用户拼接；平时只拼同一个人的连发。
+        in_window = self.store.in_window(group_id, now, float(self.config.qqbot_lyric_relay_window))
+        cross_window = (
+            float(self.config.qqbot_lyric_cross_user_window) if in_window else 0.0
+        )
+        candidates = self._candidates(group_id, frag, cross_window) or [[frag]]
 
         # 1) 版式闸门
+        #    当前这条**自己**先看一眼：它不像歌词时，拼上下文只能锦上添花，
+        #    不能把闲聊拼成「像歌词」（否则「这个bug修好了没 + see you tomorrow」
+        #    会拼出一段像歌词的文本，再命中歌里恰好相同的几个字 → 误接）。
+        solo_shape = analyze([frag], explicit=explicit)
+        solo_ok = route(solo_shape) != "skip"
         scored: list[tuple[list[Fragment], Shape, str]] = []
+        if solo_ok:
+            scored.append(([frag], solo_shape, route(solo_shape)))
         for combo in candidates:
+            if len(combo) == 1 or not solo_ok:
+                continue  # [frag] 已经加过了；当前这条不像歌词就不拼上下文
             shape = analyze(combo, explicit=explicit)
             decision = route(shape)
             if decision == "skip":
@@ -179,20 +204,29 @@ class RelayEngine:
         # 2) 连续接窗口：先只看当前这首歌（窗内直接接，接着唱的人不用再等模型）。
         #    注意这里只做**精确/高度相似**的匹配：两条都调模型、都和窗口里的歌不匹配时，
         #    说明群友换歌了，要退回完整判定，不能整群锁死在一首歌上。
+        #    候选**从长到短**试：上一条是别人发的上一句时，拼起来才定位得到下一句。
+        #    窗内的冷却**不挡接龙**（只挡「同一句重复发」）：连续对唱时第二句就被
+        #    冷却吞掉，在群里看着就是「bot 接了一句就不理人了」。
         window = float(self.config.qqbot_lyric_relay_window)
-        if self.store.in_window(group_id, now, window):
+        if in_window:
             state = self.store.get(group_id)
             if state.song is not None:
-                hit = await self._match_in_song(state.song, scored[-1][0])
-                if hit is not None:
-                    cooldown = self.store.cooldown_left(
-                        group_id, now, float(self.config.qqbot_lyric_cooldown)
-                    )
-                    if cooldown > 0:
-                        return Outcome(status="cooldown", reason=f"冷却 {int(cooldown)}s",
-                                       shape=scored[-1][1], hit=hit, verdict=None,
+                # 只试「版式过关」的候选：拼上别人的闲聊凑出一段「像歌词」的文本，
+                # 会命中歌里恰好相同的那几个字（「see you tomorrow」真是一句歌词），
+                # 那是误接。当前这条自己像歌词时，才允许拼上下文。
+                for combo, shape, _decision in reversed(scored):
+                    if not solo_ok and combo[-1].text != frag.text:
+                        continue
+                    hit = await self._match_in_song(state.song, combo)
+                    if hit is None:
+                        continue
+                    # 窗口内只挡「同一句重复发」：连续对唱时每一句都是新的，
+                    # 冷却不能挡（否则 bot 接一句就不理人了，看着像「接不上」）。
+                    if self._is_repeat(group_id, hit) and self._only_repeats(group_id, combo, hit):
+                        return Outcome(status="cooldown", reason="同一句重复发，不刷屏",
+                                       shape=shape, hit=hit, verdict=None,
                                        elapsed=time.monotonic() - started)
-                    return await self._replied(group_id, user_id, now, hit, None, scored[-1][1], started)
+                    return await self._replied(group_id, user_id, now, hit, None, shape, started)
 
         # 2.5) 免验证路径（**零 AI**）：只要没被版式判成"明显不像"，就先问曲库——
         #      「按内容搜歌 + 同名版本一致性校验」比问模型便宜得多（0.5~2 秒 vs 2~4 秒），
@@ -201,10 +235,15 @@ class RelayEngine:
         quick: object = None
         self._last_raw[group_id] = " ".join(f.text for f in latest_combo if f.text).strip()
         # a) 本地索引里已经有这句歌词（之前接过这首歌）→ 零网络直接接
-        local_hit = self._local_exact_hit(latest_combo)
+        #    同样从长到短试：上一条是别人发的上一句时，拼起来才定位得到下一句。
+        local_hit = None
+        for combo, _shape, _decision in reversed(scored):
+            local_hit = self._local_exact_hit(combo)
+            if local_hit is not None:
+                break
         if local_hit is not None:
             cooldown = self.store.cooldown_left(
-                group_id, now, float(self.config.qqbot_lyric_cooldown)
+                group_id, now, float(self.config.qqbot_lyric_cooldown), local_hit.song
             )
             if cooldown > 0:
                 self.store.set_song(group_id, local_hit.song)
@@ -220,7 +259,7 @@ class RelayEngine:
         ):
             try:
                 quick = await asyncio.wait_for(
-                    self._quick_verify(latest_combo, latest_shape.score),
+                    self._quick_verify_combos(scored, solo_ok=solo_ok),
                     timeout=float(self.config.qqbot_lyric_quick_verify_timeout),
                 )
             except asyncio.TimeoutError:
@@ -232,7 +271,7 @@ class RelayEngine:
             if quick is not _TIMEOUT:
                 quick_hit = quick  # type: ignore[assignment]
                 cooldown = self.store.cooldown_left(
-                    group_id, now, float(self.config.qqbot_lyric_cooldown)
+                    group_id, now, float(self.config.qqbot_lyric_cooldown), quick_hit.song
                 )
                 if cooldown > 0:
                     self.store.set_song(group_id, quick_hit.song)
@@ -356,8 +395,10 @@ class RelayEngine:
                 elapsed=time.monotonic() - started,
             )
 
-        # 5) 冷却：同一群刚接过就只记状态、不刷屏
-        cooldown = self.store.cooldown_left(group_id, now, float(self.config.qqbot_lyric_cooldown))
+        # 5) 冷却：同一首歌刚接过就只记状态、不刷屏（换歌/对唱不受影响）
+        cooldown = self.store.cooldown_left(
+            group_id, now, float(self.config.qqbot_lyric_cooldown), hit.song
+        )
         if cooldown > 0:
             self.store.set_song(group_id, hit.song)
             return Outcome(status="cooldown", reason=f"冷却 {int(cooldown)}s", shape=shape,
@@ -369,6 +410,37 @@ class RelayEngine:
     @property
     def _min_score(self) -> float:
         return float(self.config.qqbot_lyric_min_score)
+
+    def _only_repeats(self, group_id: int, combo: list[Fragment], hit: Hit) -> bool:
+        """当前这条消息是不是「只把刚接过的那句又发了一遍」。
+
+        拼上一条上下文后命中范围可能和上次一样（群友把上一句和新一句一起发），
+        但**当前这条**本身是新内容 —— 这种情况要接，不能当重复刷屏。
+        """
+        if not combo:
+            return True
+        current = combo[-1].norm
+        if not current:
+            return True
+        for idx in range(hit.start, min(hit.end + 1, len(hit.lines))):
+            line = normalize(hit.lines[idx])
+            if not line:
+                continue
+            # 当前这条基本就是这一行（>= 80% 的字都在里面）才算「重复发」；
+            # 只是碰巧有几个字相同不算。
+            common = sum(1 for ch in current if ch in line)
+            if common / max(1, len(current)) >= 0.8:
+                return True
+        return False
+
+    def _is_repeat(self, group_id: int, hit: Hit) -> bool:
+        """这条命中是不是「刚接过的那句」又被发了一遍（防刷屏，不挡对唱）。
+
+        比的是**命中的最后一行**：群友把「上一句 + 新一句」一起发过来时，
+        窗口起点可能不变、结尾变长 —— 结尾变了就是新内容，照样要接。
+        """
+        state = self.store.get(group_id)
+        return bool(state.last_hit_key) and state.last_hit_key == f"{hit.song.key}#{hit.end}"
 
     def _coverage_ok(self, raw: str, line: str, shape_score: float) -> bool:
         """保守复核：用户原句的内容词/字要基本都被命中的那行歌词覆盖。
@@ -385,11 +457,13 @@ class RelayEngine:
         text = (raw or "").strip()
         if not text:
             return True
-        # 英文：词覆盖
-        words = [w for w in _re.findall(r"[a-zA-Z']+", text.lower()) if len(w) > 1]
+        # 英文：词覆盖。两处放宽（都是群友写歌词的常态，不是放水）：
+        # - 数字也算词：歌词里是 seventy，群友常写 70；
+        # - 允许词形变化：loving ↔ lovin'、darling ↔ darlin'（歌词库常缩写）。
+        words = [w for w in _re.findall(r"[a-z0-9']+", text.lower()) if len(w) > 1]
         if words and len(words) >= 2:
-            line_words = set(_re.findall(r"[a-zA-Z']+", (line or "").lower()))
-            covered = sum(1 for w in words if w in line_words)
+            line_words = set(_re.findall(r"[a-z0-9']+", (line or "").lower()))
+            covered = sum(1 for w in words if _word_covered(w, line_words))
             return covered / len(words) >= 0.85
         # 中文：字覆盖
         chars = [ch for ch in text if "\u4e00" <= ch <= "\u9fff"]
@@ -409,13 +483,41 @@ class RelayEngine:
                 return hit
         return None
 
+    @staticmethod
+    def _solo_combo(
+        scored: list[tuple[list[Fragment], Shape, str]], frag: Fragment
+    ) -> tuple[list[Fragment], Shape, str]:
+        """「当前这条自己」的候选（不拼上下文）。"""
+        for item in scored:
+            if item[0][-1].text == frag.text:
+                return item
+        return scored[-1]
+
+    async def _quick_verify_combos(
+        self, scored: list[tuple[list[Fragment], Shape, str]], solo_ok: bool = True
+    ) -> Optional[Hit]:
+        """免验证路径：候选**从长到短**试（拼上上一条才定位得到「下一句」）。
+
+        但只在「当前这条自己像歌词」时才拼上下文：拼上别人的闲聊凑出一段像歌词的
+        文本，会命中歌里恰好相同的几个字（「see you tomorrow」真是一句歌词），那是误接。
+        """
+        if not solo_ok:
+            return None
+        for combo, shape, _decision in reversed(scored):
+            hit = await self._quick_verify(combo, shape.score)
+            if hit is not None:
+                return hit
+        return None
+
     async def _quick_verify(self, frags: list[Fragment], shape_score: float = 1.0) -> Optional[Hit]:
         """免验证路径：用「按内容搜歌名」当证据，再在曲库里逐行比对。
 
         返回命中结果；返回 ``None`` 表示**没有证据**（这句不属于任何歌），
         调用方据此判定「像歌词但不是歌」，直接当聊天处理。
         """
-        text_norm = "".join(f.norm for f in frags)
+        # 多段按行拼（"\n"）：best_window 的「部分命中」靠分行位置判断
+        # 「哪几段对上了哪几行」，粘成一坨就只能整段比，容易漏接。
+        text_norm = "\n".join(f.norm for f in frags if f.norm)
         if not text_norm:
             return None
         # 搜索词用**原文**：英文靠空格分词（"ifihadmylife" 搜不到歌），
@@ -457,10 +559,13 @@ class RelayEngine:
         started: float,
     ) -> Outcome:
         self.store.mark_replied(group_id, hit.song, user_id, now)
+        self.store.get(group_id).last_hit_key = f"{hit.song.key}#{hit.end}"
         self.stats["replied"] += 1
+        # INFO 级别打一行「接了哪句」：群里「怎么没接上 / 接错了」时，
+        # 直接看日志就能知道是没匹配上还是匹配到了别处，不用靠猜。
         logger.info(
             f"[qqbot_lyric] 群 {group_id} 接龙：{hit.song.label} 第 {hit.start + 1}~{hit.end + 1} 行"
-            f"（{hit.how}, score={hit.score:.2f}）"
+            f"（{hit.how}, score={hit.score:.2f}）→ 接「{hit.next_line}」"
         )
         return Outcome(
             status="replied",
@@ -486,6 +591,22 @@ class RelayEngine:
             existing.add(stamp)
         bucket.sort(key=lambda f: f.ts)
         self._fragments[group_id] = bucket[-16:]
+
+
+def _word_covered(word: str, line_words: set[str]) -> bool:
+    """这个词是否被歌词行覆盖（允许缩写/词形变化：loving ↔ lovin'）。"""
+    if word in line_words:
+        return True
+    if word.isdigit():
+        return False
+    stem = word.replace("'", "").rstrip("g") if word.endswith("ng") else word.replace("'", "")
+    for other in line_words:
+        if other.isdigit():
+            continue
+        plain = other.replace("'", "")
+        if plain.startswith(stem[: max(3, len(stem) - 2)]) or stem.startswith(plain[: max(3, len(plain) - 2)]):
+            return True
+    return False
 
 
 def gate_text(shape: Shape) -> str:

@@ -33,6 +33,16 @@ _EMOJI_RE = re.compile(
 )
 _CMD_START = "/／!！.#%？?、"
 
+# 「—— 歌名 - 歌手」这类署名行（bot 自己接龙时曾经带过，群友也会顺手带上）。
+# 这种行不是歌词，**不能**拿去匹配，也不能当成「上一句」参与拼接。
+_CREDIT_RE = re.compile(
+    r"^(?:[-—–~～>*·•\s]+)?(?:"
+    r"《[^》]{1,40}》|［[^］]{1,40}］|\[[^\]]{1,40}\]"
+    r"|[^\n]{1,60}\s[-–—]\s[^\n]{1,40}"
+    r")\s*$"
+)
+_LINE_SPLIT_RE = re.compile(r"[\r\n]+")
+
 
 @dataclass
 class Fragment:
@@ -72,6 +82,29 @@ def clean_text(text: str) -> str:
     text = _LEADING_JUNK_RE.sub("", text)
     text = _TRAILING_JUNK_RE.sub("", text)
     return " ".join(text.split())
+
+
+def is_credit_line(text: str) -> bool:
+    """这行是不是「—— 歌名 - 歌手」这类署名（不是歌词，不参与匹配）。"""
+    body = clean_text(text)
+    if not body or len(body) > 80:
+        return False
+    return bool(_CREDIT_RE.match(body))
+
+
+def lyric_lines(text: str) -> list[str]:
+    """把一条消息拆成「歌词行」：按换行拆开，去掉署名行。
+
+    bot 自己接过龙之后，群里常有人把「下一句 +（—— 歌名 - 歌手）」整段复制回来；
+    署名行混进去会让整段匹配失败（多出来的歌名把相似度拉低），所以先剔掉。
+    """
+    out: list[str] = []
+    for raw in _LINE_SPLIT_RE.split(text or ""):
+        line = clean_text(raw)
+        if not line or is_credit_line(line):
+            continue
+        out.append(line)
+    return out
 
 
 def normalize(text: str, simplify: bool = True) -> str:
@@ -187,12 +220,19 @@ def build_candidates(
     fragments: Iterable[Fragment],
     max_segments: int = 4,
     burst_window: float = 12.0,
+    cross_user_window: float = 0.0,
 ) -> list[list[Fragment]]:
     """把碎片拼成候选组合：``[最新1条]``、``[最新2条]`` ... 上限 ``max_segments``。
 
-    只拼接「同一个用户 + 相邻 + 时间间隔不超过 ``burst_window``」的碎片
-    （``fragments`` 需按时间正序）；两条都以「我/你」开头时视为不同的话，不拼。
-    返回的组合按长度从短到长排列。
+    只拼接「相邻 + 时间间隔不超过窗口」的碎片（``fragments`` 需按时间正序）；
+    两条都以「我/你」开头时视为不同的话，不拼。
+
+    - 同一个人连发：窗口 = ``burst_window``（默认 12 秒）；
+    - **不同人对唱**：窗口 = ``cross_user_window``（默认 0 = 不拼）。
+      连续接龙时群友常常一句一句轮流发，这时要拼上一条才能定位到「下一句」；
+      平时不拼，免得把两个人的闲聊拼成一段假歌词。
+
+    返回的组合按长度从短到长排列，且**全部以最后一条结尾**。
     """
     items = list(fragments)
     if not items:
@@ -201,14 +241,17 @@ def build_candidates(
     current: list[Fragment] = [items[0]]
     for prev, cur in zip(items, items[1:]):
         same_user = cur.user_id == prev.user_id
-        close = (cur.ts - prev.ts) <= burst_window
-        if same_user and close and not _same_voice(prev, cur):
+        limit = burst_window if same_user else max(0.0, cross_user_window)
+        close = 0 <= (cur.ts - prev.ts) <= limit
+        if close and not _same_voice(prev, cur):
             current.append(cur)
         else:
             groups.append(current)
             current = [cur]
     groups.append(current)
 
+    # 候选必须以「当前这条」结尾：从最后一条往前取，而不是从最后一段的开头取
+    # （最后一段只有一条时，旧写法会丢掉前面同一段里的上下文）
     tail = groups[-1]
     out: list[list[Fragment]] = []
     for size in range(1, min(max_segments, len(tail)) + 1):
