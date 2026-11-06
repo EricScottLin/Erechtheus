@@ -180,8 +180,12 @@ class Config(BaseModel):
         ),
     )
     qqbot_lyric_quick_verify_timeout: float = Field(
-        default=4.0, ge=1.0, le=20.0,
-        description="免验证路径的超时（秒）；超时则交给模型判定，不当作「不是歌词」",
+        default=8.0, ge=1.0, le=30.0,
+        description=(
+            "免验证路径的超时（秒）；超时则交给模型判定，不当作「不是歌词」。"
+            "8 秒是实测值：冷启动时本地索引为空，要依次搜 lrclib / 网易云，"
+            "日文歌（「誰も知らない 二人だけの夜」）约 9 秒才出结果，4 秒会全部超时"
+        ),
     )
 
     # ---- 匹配 ----

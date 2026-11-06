@@ -677,6 +677,29 @@ class Library:
             self.stats["netease"] += 1
         return songs
 
+    async def netease_title_candidates(self, phrase: str, text_norm: str = "") -> list[Song]:
+        """按歌名搜网易云，只留「歌名就在这句里」的那几首（点题句）。
+
+        「誰も知らない 二人だけの夜」里的「二人だけの夜」就是歌名：网易云按内容搜
+        返回的是《あの夢をなぞって》（歌词里确实有这两句，但歌名不是它），
+        按歌名搜才能拿到《二人だけの夜》本身。返回的 Song 已带网易云 id，可直接取歌词。
+        """
+        from .search import similarity
+
+        if self.netease is None or not phrase:
+            return []
+        songs = await self.netease.search(phrase)
+        out: list[Song] = []
+        for song in songs:
+            title = clean_title(song.title)
+            key = "".join(ch for ch in title.lower() if ch.isalnum() or "\u3040" <= ch <= "\u9fff")
+            if not key:
+                continue
+            # 只留「歌名就是这段字」的（允许歌名比片段短一点，如「二人だけの夜」vs「二人だけの夜に」）
+            if key in text_norm or (len(key) >= 3 and similarity(key, text_norm) >= 0.7):
+                out.append(song)
+        return out[:3]
+
     async def fetch_by_title(self, title: str) -> list[tuple[Song, list[str]]]:
         """按歌名精确取歌词：搜索结果里标题和原文一致（去后缀后）才算。
 

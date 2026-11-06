@@ -19,6 +19,7 @@ if not (__package__ or "").endswith("qqbot_lyric"):
 
 
 import asyncio
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Optional
@@ -34,6 +35,9 @@ from .search import Hit, SearchContext, best_window, exact_hits, find_in_songs, 
 from .state import RelayStore
 from .text import Fragment, build_candidates, clean_text, normalize
 
+
+# 中日文字符（汉字 + 平假名 + 片假名）：保守复核按「字」算覆盖度时用
+_CJK_CHAR = re.compile(r"[\u3040-\u30ff\u4e00-\u9fff]")
 
 # 免验证路径超时哨兵：超时 ≠ 不是歌词，要交回模型判定
 _TIMEOUT = object()
@@ -465,10 +469,11 @@ class RelayEngine:
             line_words = set(_re.findall(r"[a-z0-9']+", (line or "").lower()))
             covered = sum(1 for w in words if _word_covered(w, line_words))
             return covered / len(words) >= 0.85
-        # 中文：字覆盖
-        chars = [ch for ch in text if "\u4e00" <= ch <= "\u9fff"]
+        # 中日文：字覆盖（假名也算字 —— 日文歌词「誰も知らない」里假名是关键内容，
+        # 只数汉字会得到「二人」这种碎片，覆盖度算出来毫无意义）
+        chars = [ch for ch in text if _CJK_CHAR.match(ch)]
         if chars:
-            line_chars = set(ch for ch in (line or "") if "\u4e00" <= ch <= "\u9fff")
+            line_chars = set(ch for ch in (line or "") if _CJK_CHAR.match(ch))
             covered = sum(1 for ch in chars if ch in line_chars)
             return covered / len(chars) >= 0.85
         return True
@@ -510,10 +515,14 @@ class RelayEngine:
         return None
 
     async def _quick_verify(self, frags: list[Fragment], shape_score: float = 1.0) -> Optional[Hit]:
-        """免验证路径：用「按内容搜歌名」当证据，再在曲库里逐行比对。
+        """免验证路径：在曲库里找证据（本地索引 → 歌名线索 → 按内容搜），逐行比对。
 
         返回命中结果；返回 ``None`` 表示**没有证据**（这句不属于任何歌），
         调用方据此判定「像歌词但不是歌」，直接当聊天处理。
+
+        证据来源按「便宜 → 贵」：本地索引（之前接过这首歌就零网络）→ 网易云按内容搜。
+        网易云那条要过**保守复核**（用户原句的字/词基本都被命中行覆盖），
+        防止「只对上一部分」就接。
         """
         # 多段按行拼（"\n"）：best_window 的「部分命中」靠分行位置判断
         # 「哪几段对上了哪几行」，粘成一坨就只能整段比，容易漏接。
@@ -523,10 +532,25 @@ class RelayEngine:
         # 搜索词用**原文**：英文靠空格分词（"ifihadmylife" 搜不到歌），
         # 中文有没有空格都能搜到。
         keyword = " ".join(f.text for f in frags if f.text).strip()[:60] or text_norm
+
+        # a) 本地索引里已经有这句（之前接过这首歌）→ 零网络，但也要过保守复核
+        #    （「誰も知らない」能被《知らない》里单独一行「知らない」以 0.83 命中，
+        #    可这句其实是另一首歌的，只对上一部分不算数）
+        for frag in reversed(frags):
+            entries = self.library.index.lookup(frag.norm)
+            for song, idx in entries:
+                lines = self.library.index.lines_of(song)
+                if not lines or idx >= len(lines):
+                    continue
+                if not self._coverage_ok(keyword, lines[idx], shape_score):
+                    continue
+                return Hit(song=song, score=1.0, lines=lines, start=idx, end=idx, how="exact")
+
+        # b) 网易云按内容搜（最慢）+ 保守复核
         try:
             found = await self.library.netease_lyric_lookup(keyword, text_norm)
-        except Exception as e:  # noqa: BLE001 —— 免验证路径失败就交给模型
-            logger.debug(f"[qqbot_lyric] 免验证搜索失败：{e}")
+        except Exception as e:  # noqa: BLE001
+            logger.debug(f"[qqbot_lyric] 免验证网易云搜索失败：{e}")
             return None
         if not found:
             return None

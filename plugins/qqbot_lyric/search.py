@@ -23,8 +23,12 @@ from typing import Iterable, Optional
 from .library import LyricLine, Library, Song, clean_title
 from .text import Fragment, normalize, normalize_variants
 
-# 只保留中文/英数用于比对（标点、emoji 已在 normalize 去掉）
-_CJK_RUN = re.compile(r"[\u4e00-\u9fff]+")
+# 只保留中文/英数用于比对（标点、emoji 已在 normalize 去掉）。
+# 日文假名也算：日文歌词里「誰も知らない」这种写法，假名是关键内容，
+# 只取汉字片段会得到「二人」这种没法搜的碎片。
+_CJK_RUN = re.compile(r"[\u3040-\u30ff\u4e00-\u9fff]+")
+# 片段里按空格/标点切开的「一整段」（歌名常常就是其中一段）
+_PIECE_SPLIT = re.compile(r"[\s,，、/|·…—~～]+")
 
 
 @dataclass
@@ -254,6 +258,7 @@ class SearchContext:
     explicit_title: str = ""  # 用户明确点名的歌（/歌词 xxx）
     recent_song: Optional[Song] = None  # 最近正在接的歌
     allow_network: bool = True
+    allow_netease: bool = True  # 是否允许网易云兜底（免验证路径自己搜，不走这里）
 
     @classmethod
     def build(
@@ -264,6 +269,7 @@ class SearchContext:
         explicit_title: str = "",
         recent_song: Optional[Song] = None,
         allow_network: bool = True,
+        allow_netease: bool = True,
     ) -> "SearchContext":
         texts = [f.text for f in frags if f.text]
         hints = [x for x in (hint_title, hint_artist, f"{hint_title} {hint_artist}".strip()) if x]
@@ -276,6 +282,7 @@ class SearchContext:
             explicit_title=explicit_title,
             recent_song=recent_song,
             allow_network=allow_network,
+            allow_netease=allow_netease,
         )
 
 
@@ -389,11 +396,25 @@ async def search(
         if hit is not None and hit.score >= min_score:
             return hit
 
+    # 5.5) 歌名就在这句里（点题句）：拿这段字去搜歌名，命中标题且歌词里真有这句才算。
+    #      lrclib 的 q= 是歌名模糊搜索，正好用得上；日文歌 lrclib 收录少，
+    #      再按歌名搜一次网易云（「二人だけの夜」这种小歌只有网易云有）。
+    for phrase in salience_queries(ctx.texts, max_queries=2):
+        songs = await library.search_songs(phrase, limit=5)
+        if allow_netease and ctx.allow_netease and library.netease is not None:
+            songs += await library.netease_title_candidates(phrase, ctx.text_norm)
+        if not songs:
+            continue
+        hit = await find_in_songs(library, songs, ctx, min_score)
+        if hit is not None and hit.score >= min_score:
+            hit.how = "phrase"
+            return hit
+
     # 6) 网易云兜底（最慢，放最后）。网易云搜索是「按内容」的：
     #    直接拿整句歌词去搜，就能搜到它所属的歌（「我听见雨滴落在青青草地」→ 小幸运）。
     #    lrclib 的模糊搜索做不到这点（实测同一句返回 0 条）。
     #    命中后直接取网易云的歌词 —— 连 lrclib 没收录的歌也能接上。
-    if allow_netease and library.netease is not None:
+    if allow_netease and ctx.allow_netease and library.netease is not None:
         for phrase in netease_queries(ctx):
             found = await library.netease_lyric_lookup(phrase, ctx.text_norm)
             if not found:
@@ -451,16 +472,21 @@ def hint_queries(ctx: "SearchContext") -> list[str]:
 def salience_queries(texts: list[str], max_queries: int = 2) -> list[str]:
     """从片段里挑出像歌名的短语（歌名常是片段里最「点题」的那几个字）。
 
-    做法很土但有效：取每段连续中文的 2~6 字子串里「在语料里罕见」的
-    ——没有语料，于是退化为：取每段的开头 2~6 字 + 结尾 2~6 字各若干。
+    做法很土但有效：取每段连续中文/假名的 2~8 字子串里「在语料里罕见」的
+    ——没有语料，于是退化为：取每段的开头/结尾若干字，以及**按空格/逗号切开
+    的整段**（「誰も知らない 二人だけの夜」→「誰も知らない」就是歌名）。
     真正的歌名线索主要来自模型；这里只是兜底。
     """
     out: list[str] = []
     for text in texts[-2:]:
+        for piece in _PIECE_SPLIT.split(text):
+            piece = piece.strip()
+            if 4 <= len(piece) <= 12:
+                out.append(piece)
         for run in _CJK_RUN.findall(text):
             if len(run) < 2:
                 continue
-            for size in (6, 5, 4, 3, 2):
+            for size in (8, 6, 5, 4, 3, 2):
                 if len(run) >= size:
                     out.append(run[:size])
                     out.append(run[-size:])
