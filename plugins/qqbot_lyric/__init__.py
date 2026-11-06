@@ -6,7 +6,7 @@
   就接「但故事的最后你好像还是说了拜拜」；@机器人 或引用某条消息时同样会响应；
 - **连续接**：接过之后 2 分钟内，别人再发同首歌的某一句，bot 继续往下接，
   不会突然换歌；
-- **查歌词**：``/歌词 <歌名>``、``/接 <关键词>`` 直接给出歌名歌手、命中行与下一句；
+- **查歌**：``/什么歌 <歌词片段>``（别名 ``/歌词``）直接回答这是哪首歌；
 - **按群开关**：默认关闭，群管发 ``/开启 歌词`` 打开（``/本群功能`` 查看）。
 
 判定分两层：先按「歌词长什么样」做本地版式闸门（长度/分行/押韵/口语词），
@@ -16,6 +16,7 @@
 
 import asyncio
 import json
+import re
 import time
 from typing import Optional
 
@@ -43,14 +44,12 @@ from .text import clean_text, is_noise  # noqa: E402
 
 __plugin_meta__ = PluginMetadata(
     name="歌词接龙",
-    description="群友发歌词，机器人接下一句（本地版式判断 + 模型确认 + lrclib/网易云曲库）",
+    description="群友发歌词，机器人接下一句；也可用 /什么歌 查这是哪首歌",
     usage="""\
 （无需命令：群里发一句歌词，bot 认出歌名后自动接下一句；
   @机器人 发歌词、或引用一句歌词再 @机器人，也会接）
-/歌词 <歌名/歌词片段>   查歌词：歌名歌手 + 命中行 + 下一句
-/接 <关键词>            同 /歌词
-/歌词 完整版 <歌名>     输出整首歌词（最多 40 行）
-/歌词 <歌名> <歌词片段>  按歌名找歌，再定位片段（歌名不确定时用）
+/什么歌 <歌词片段>      查这句是哪首歌（也可直接给歌名）
+/歌词 <歌词片段>        同上（别名）
 /本群功能               开关「歌词接龙」（默认关闭，群管用 /开启 歌词 打开）""",
     type="application",
     homepage="https://github.com/EricScottLin/Erechtheus",
@@ -274,7 +273,9 @@ def _relative_timestamps(items: list[tuple[str, str, float]]) -> list[tuple[str,
 
 
 # ---------------------------------------------------------------- /歌词 命令
-lyric_cmd = on_command("歌词", aliases={"接", "查歌词", "下一句"}, priority=8, block=True)
+lyric_cmd = on_command(
+    "什么歌", aliases={"歌词", "查歌词", "这是啥歌", "这首歌是什么"}, priority=8, block=True
+)
 
 
 @lyric_cmd.handle()
@@ -285,20 +286,19 @@ async def _handle_lyric(bot: Bot, event: MessageEvent, arg: Message = CommandArg
     if not raw:
         await lyric_cmd.finish(
             "用法：\n"
-            "/歌词 <歌名或歌词片段>   查歌词（歌名歌手 + 下一句）\n"
-            "/歌词 完整版 <歌名>      输出整首歌词\n"
+            "/什么歌 <歌词片段或歌名>   查这句是哪首歌\n"
+            "/歌词 <歌词片段或歌名>     同上（别名）\n"
             "群里直接发歌词，bot 也会自动接下一句～"
         )
 
-    full = False
-    if raw.startswith(("完整版", "全文", "全部")):
-        full = True
-        raw = raw[3:].strip()
+    # 兼容旧习惯：带着「完整版/全文/全部」发过来时，只取后面的歌名/歌词
+    # （现在不再输出整首，统一只回答「是什么歌」）
+    raw = re.sub(r"^(?:完整版|全文|全部|整首|全部歌词)\s*", "", raw).strip()
     if not raw:
-        await lyric_cmd.finish("要查哪首歌？例如 /歌词 晴天")
+        await lyric_cmd.finish("要查哪句歌词？例如 /什么歌 从前从前有个人爱你很久")
 
     try:
-        reply = await asyncio.wait_for(_query(raw, full), timeout=30)
+        reply = await asyncio.wait_for(_query(raw), timeout=30)
     except asyncio.TimeoutError:
         reply = "查得有点久（可能曲库没响应），换个说法再试？"
     except Exception as e:  # noqa: BLE001
@@ -320,14 +320,47 @@ def _split_title_and_fragment(raw: str) -> tuple[str, str]:
     return "", ""
 
 
-async def _query(raw: str, full: bool = False) -> str:
-    """查歌词：先当歌名找，再当片段定位。"""
+def _song_line(song) -> str:
+    """统一格式：🎵 《歌名》- 歌手。"""
+    title = clean_display_title(song.title)
+    return f"🎵 《{title}》- {song.artist}" if song.artist else f"🎵 《{title}》"
+
+
+_DISPLAY_SUFFIX_RE = re.compile(
+    r"\s*[（(\[【][^）)\]】]{0,40}[）)\]】]\s*\)?"
+)
+
+
+def clean_display_title(title: str) -> str:
+    """展示用歌名：去掉所有括号注释（"(原唱 XX)"、"(Live版)"、"《电影》主题曲"…）。
+
+    只用于**展示**，检索时仍用 library.clean_title（它只削明确的版本后缀）。
+    群友看到「晴天 - 周杰伦」，而不是「晴天 (原唱 周杰伦) (女声版)) - RyaVocal」。
+    """
+    text = _DISPLAY_SUFFIX_RE.sub(" ", title or "")
+    text = re.sub(r"\s+", " ", text).strip(" -\u3000")
+    return text or (title or "")
+
+
+async def _query(raw: str) -> str:
+    """查「这段是哪首歌」：本地索引 → 当歌名找 → 网络搜片段。
+
+    只回歌名 + 歌手 —— 群友要的是「这是什么歌」，不是整首歌词。
+    顺带把命中的那一句回显一下，方便确认没找错。
+    """
     from .library import clean_title
     from .text import Fragment, normalize
 
+    # 最快：本地索引里已经有这句歌词（之前接过这首歌）→ 0 网络
+    from .search import Hit, exact_hits
+
+    local = [h for h in exact_hits(library, raw) if h.next_line]
+    if local:
+        return _render_song(local[0])
+
     title_hint, fragment = _split_title_and_fragment(raw)
 
-    # 0) 「歌名 + 片段」：用标题找歌，再用片段定位
+    # 0) 「歌名 + 片段」
     if title_hint and fragment:
         song = await library.find_by_name(title_hint)
         if song is not None:
@@ -335,44 +368,31 @@ async def _query(raw: str, full: bool = False) -> str:
             ctx = SearchContext.build([frag], explicit_title=clean_title(song.title), recent_song=song)
             hit = await search(library, ctx, min_score=plugin_config.qqbot_lyric_min_score)
             if hit is not None:
-                return _render_hit(hit)
-            lines = library.index.lines_of(song)
-            return "\n".join([f"🎵 《{song.title}》- {song.artist}", *lines[:5], "…"])
+                return _render_song(hit)
+            return _song_line(song)
 
     # 1) 当歌名
     song = await library.find_by_name(raw)
     if song is not None:
-        lines = library.index.lines_of(song)
-        out = [f"🎵 《{song.title}》- {song.artist}" if song.artist else f"🎵 《{song.title}》"]
-        if full:
-            out.extend(line for line in lines[:40])
-            if len(lines) > 40:
-                out.append(f"…（共 {len(lines)} 行）")
-        else:
-            out.append("歌词：" + lines[0] if lines else "")
-            if len(lines) > 1:
-                out.append("（用 /歌词 完整版 " + song.title + " 看整首）")
-        return "\n".join(line for line in out if line)
+        return _song_line(song)
 
     # 2) 当片段
     frag = Fragment(text=raw, norm=normalize(raw), user_id="0", ts=time.monotonic())
     ctx = SearchContext.build([frag], explicit_title=clean_title(raw) if len(raw) <= 12 else "")
     hit = await search(library, ctx, min_score=plugin_config.qqbot_lyric_min_score)
     if hit is None:
-        return f"没找到和「{raw}」对应的歌，可能是我曲库里没有（试试 /歌词 <歌名>）。"
-    return _render_hit(hit)
+        return f"没找到「{raw}」对应的歌，可能是我曲库里没有。"
+    return _render_song(hit)
 
 
-def _render_hit(hit) -> str:
-    song = hit.song
-    out = [f"🎵 《{song.title}》- {song.artist}" if song.artist else f"🎵 《{song.title}》"]
-    for idx in range(max(0, hit.start - 1), min(hit.end + 1, len(hit.lines))):
-        out.append(hit.lines[idx])
-    nxt = hit.next_lines
-    if nxt:
-        out.append("下一句：" + nxt[0])
-    out.append(f"（命中第 {hit.start + 1} 行，相似度 {hit.score:.2f}）")
-    return "\n".join(out)
+def _render_song(hit) -> str:
+    """「是什么歌」的结果：歌名 + 歌手，附命中的那句做佐证。"""
+    lines = [f"🎵 《{clean_display_title(hit.song.title)}》- {hit.song.artist}"
+             if hit.song.artist else f"🎵 《{clean_display_title(hit.song.title)}》"]
+    matched = " ".join(line.strip() for line in hit.matched_text if line.strip())
+    if matched:
+        lines.append(f"（对应歌词：{matched[:60]}）")
+    return "\n".join(lines)
 
 
 # ---------------------------------------------------------------- 生命周期

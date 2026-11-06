@@ -39,7 +39,8 @@ NETEASE_UA = (
 
 
 _GENERIC_PAREN_RE = re.compile(
-    r"[（(\[【][^）)\]】]*(?:版|live|伴奏|remix|翻唱|cover|demo|现场|混音|片段|dj|DJ|女声|男声)[^）)\]】]*[）)\]】]",
+    r"[（(\[【][^）)\]】]*(?:版|live|伴奏|remix|翻唱|cover|demo|现场|混音|片段|dj|DJ|女声|男声|"
+    r"原唱|翻自|改编|remake)[^）)\]】]*[）)\]】]",
     re.IGNORECASE,
 )
 
