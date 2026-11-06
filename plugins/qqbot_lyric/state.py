@@ -32,6 +32,7 @@ class RelayState:
     last_reply_at: float = 0.0  # bot 上次接龙的时间（monotonic）
     last_song_key: str = ""  # 上次接的是哪首歌（冷却只挡同一首歌）
     last_hit_key: str = ""  # 上次接的是哪一处（歌#起行-止行；同一句重复发不刷屏）
+    last_reply_text: str = ""  # 上次接的那句原文（群友复读它 = 接着唱，要往下接）
     last_sender: str = ""  # 上次被接的人（自己唱自己接就没意思了）
     replies: int = 0  # 这一轮接了几次
     recent: list[Song] = field(default_factory=list)  # 最近出现过的歌（新的在前）
@@ -85,8 +86,11 @@ class RelayStore:
         return None
 
     # ------------------------------------------------------------- 写入
-    def mark_replied(self, group_id: int, song: Song, sender: str, now: float) -> None:
+    def mark_replied(
+        self, group_id: int, song: Song, sender: str, now: float, reply_text: str = ""
+    ) -> None:
         state = self.get(group_id)
+        state.last_reply_text = reply_text
         if state.song is None or state.song.key != song.key:
             state.song = song
             state.replies = 0

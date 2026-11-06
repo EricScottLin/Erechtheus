@@ -453,10 +453,15 @@ class TestEngine(unittest.TestCase):
             self.assertFalse(out.replied, f"{body} 被误接：{out.hit.next_line if out.hit else ''}")
 
     def test_same_line_repeated_not_spammed(self):
-        """窗口内同一句又发一遍：不重复接（防刷屏）。"""
+        """窗口内把 bot 刚接过的那句又发一遍：不重复接（防刷屏）。
+
+        但群友复读的是**bot 刚接的那句**（「Today's the day I grow some balls」）时，
+        那是接着对唱，要往下接 —— 见 test_resung_full_line_continues。
+        """
         engine, *_ = self.build({}, qqbot_lyric_cooldown=45)
         first = asyncio.run(engine.handle(1, "从前从前有个人爱你很久", "u1", ts=100.0))
         self.assertTrue(first.replied)
+        # bot 接了「但故事的最后…」；再把它发一遍 = 刷屏
         again = asyncio.run(engine.handle(1, "从前从前有个人爱你很久", "u2", ts=103.0))
         self.assertEqual(again.status, "cooldown")
 
@@ -640,12 +645,41 @@ class TestRelayContinuation(unittest.TestCase):
         self.assertEqual(second.hit.next_line, "Baby my heart")
 
     def test_same_song_repeat_still_cooled(self):
-        """同一首歌里重复发同一句，冷却仍然生效（不刷屏）。"""
+        """同一首歌里把 bot 接过的上一句再发一遍：仍然挡住（不刷屏）。"""
         engine, _, _ = self.build(qqbot_lyric_cooldown=45)
         first = asyncio.run(engine.handle(1, "Baby my heart", "u1", ts=100.0))
         self.assertTrue(first.replied, first)
+        # bot 接了「Could still fall as hard」；把上一句「Baby my heart」再发一遍 = 刷屏
         again = asyncio.run(engine.handle(1, "Baby my heart", "u2", ts=101.0))
         self.assertEqual(again.status, "cooldown")
+
+    def test_resung_full_line_continues(self):
+        """群友把 bot 刚接的那句原样复读：那是接着对唱，要往下接（2026-11-06 线上）。"""
+        engine, _, _ = self.build(qqbot_lyric_cooldown=45)
+        first = asyncio.run(engine.handle(1, "Baby my heart", "u1", ts=100.0))
+        self.assertTrue(first.replied, first)
+        self.assertEqual(first.hit.next_line, "Could still fall as hard")
+        again = asyncio.run(engine.handle(1, "Could still fall as hard", "u2", ts=101.0))
+        self.assertTrue(again.replied, again)
+        self.assertEqual(again.hit.next_line, "At twenty three")
+
+    def test_chat_in_relay_window_not_matched(self):
+        """接龙窗口内别人发的闲聊不能被接（2026-11-06 线上：「思劳牧慢速」被接成歌词）。
+
+        窗口内没有模型复核，只靠版式 + 精确匹配；闲聊拼上一条上下文后
+        会命中「上一句」，于是被当成歌词又接一遍。要求：当前这条自己不像歌词
+        时不许拼上下文，命中区间还必须真的覆盖当前这条。
+        """
+        engine, _, _ = self.build(qqbot_lyric_cooldown=45)
+        first = asyncio.run(engine.handle(1, "Baby my heart", "u1", ts=100.0))
+        self.assertTrue(first.replied, first)
+        self.assertEqual(first.hit.next_line, "Could still fall as hard")
+        chat = asyncio.run(engine.handle(1, "思劳牧慢速", "u9", ts=105.0))
+        self.assertFalse(chat.replied, chat)
+        # 闲聊没被接之后，真正的下一句照样接得上（窗口没被打断）
+        nxt = asyncio.run(engine.handle(1, "Could still fall as hard", "u9", ts=108.0))
+        self.assertTrue(nxt.replied, nxt)
+        self.assertEqual(nxt.hit.next_line, "At twenty three")
 
     def test_other_song_not_blocked_by_cooldown(self):
         """冷却只挡同一首歌：换一首歌接着唱不受影响。"""

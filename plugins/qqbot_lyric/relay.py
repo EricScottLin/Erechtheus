@@ -218,15 +218,28 @@ class RelayEngine:
                 # 只试「版式过关」的候选：拼上别人的闲聊凑出一段「像歌词」的文本，
                 # 会命中歌里恰好相同的那几个字（「see you tomorrow」真是一句歌词），
                 # 那是误接。当前这条自己像歌词时，才允许拼上下文。
-                for combo, shape, _decision in reversed(scored):
+                for combo, shape, decision in reversed(scored):
                     if not solo_ok and combo[-1].text != frag.text:
+                        continue
+                    # 窗口内只接「版式明确像歌词」的：窗内没有模型复核，
+                    # 一句闲聊（「思劳牧慢速」）只要碰巧撞上歌里某行就会被接，
+                    # 群里看着就是「接歌词的时候乱接别人的话」。
+                    if decision != "obvious":
                         continue
                     hit = await self._match_in_song(state.song, combo)
                     if hit is None:
                         continue
+                    # 拼上下文只用来「补上一句」，当前这条自己必须也像歌词：
+                    # 否则「Baby my heart + 思劳牧慢速」会命中上一句、再往下接一遍，
+                    # 等于把别人的闲聊当歌词接了。
+                    if combo[-1] is not frag and not solo_ok:
+                        continue
+                    # 命中区间必须真的覆盖到当前这条（不能只靠拼上来的上下文命中）。
+                    if not self._covers_current(hit, frag):
+                        continue
                     # 窗口内只挡「同一句重复发」：连续对唱时每一句都是新的，
                     # 冷却不能挡（否则 bot 接一句就不理人了，看着像「接不上」）。
-                    if self._is_repeat(group_id, hit) and self._only_repeats(group_id, combo, hit):
+                    if self._is_repeat(group_id, hit, frag) and self._only_repeats(group_id, combo, hit):
                         return Outcome(status="cooldown", reason="同一句重复发，不刷屏",
                                        shape=shape, hit=hit, verdict=None,
                                        elapsed=time.monotonic() - started)
@@ -415,6 +428,34 @@ class RelayEngine:
     def _min_score(self) -> float:
         return float(self.config.qqbot_lyric_min_score)
 
+    @staticmethod
+    def _covers_current(hit: Hit, frag: Fragment) -> bool:
+        """命中区间里的歌词行有没有真的「覆盖当前这条」。
+
+        拼上一条上下文才命中的情况（「Baby my heart + 思劳牧慢速」）里，
+        当前这条自己一个字都对不上 → 不能接，否则就是把闲聊当歌词接。
+        反过来，一句歌词被拆成歌里的好几行（「And darlin' I will / Be lovin' you /
+        Till we're seventy」）时，单行覆盖不到 80%，要把区间里所有行拼起来算。
+        """
+        current = frag.norm
+        if not current:
+            return False
+        lines = hit.lines[hit.start: hit.end + 1]
+        if not lines:
+            return False
+        for line in lines:
+            line_norm = normalize(line)
+            if not line_norm:
+                continue
+            common = sum(1 for ch in current if ch in line_norm)
+            if common / max(1, len(current)) >= 0.8:
+                return True
+        joined = normalize(" ".join(lines))
+        if not joined:
+            return False
+        common = sum(1 for ch in current if ch in joined)
+        return common / max(1, len(current)) >= 0.8
+
     def _only_repeats(self, group_id: int, combo: list[Fragment], hit: Hit) -> bool:
         """当前这条消息是不是「只把刚接过的那句又发了一遍」。
 
@@ -437,14 +478,40 @@ class RelayEngine:
                 return True
         return False
 
-    def _is_repeat(self, group_id: int, hit: Hit) -> bool:
+    def _is_repeat(self, group_id: int, hit: Hit, frag: Optional[Fragment] = None) -> bool:
         """这条命中是不是「刚接过的那句」又被发了一遍（防刷屏，不挡对唱）。
 
         比的是**命中的最后一行**：群友把「上一句 + 新一句」一起发过来时，
         窗口起点可能不变、结尾变长 —— 结尾变了就是新内容，照样要接。
+
+        例外：当前这条就是 bot 刚接的那句（群友复读一遍接着唱，
+        「Today's the day I grow some balls」）→ 要往下接，不是刷屏。
         """
         state = self.store.get(group_id)
-        return bool(state.last_hit_key) and state.last_hit_key == f"{hit.song.key}#{hit.end}"
+        if not (state.last_hit_key and state.last_hit_key == f"{hit.song.key}#{hit.end}"):
+            return False
+        # 复读 bot 刚接的那句 = 接着对唱，要往下接（不是刷屏）。
+        # 这里用「用户这条 ↔ 上次 bot 接的那句」判断，不依赖命中区间。
+        if frag is not None and self._resung_replied_line(group_id, frag):
+            logger.debug("[qqbot_lyric] 复读刚接的那句 → 继续往下接")
+            return False
+        return True
+
+    def _resung_replied_line(self, group_id: int, frag: Fragment) -> bool:
+        """当前这条是不是「bot 刚接的那句」又被发了一遍（复读接着唱）。
+
+        群友复读 bot 刚接的那句（「Today's the day I grow some balls」）是接着对唱，
+        要往下接；而把 bot 接过的**上一句**再发一遍（「Baby my heart」）是刷屏 ——
+        后者和刚接的那句不是同一行。所以只比「当前这条 ↔ 上次 bot 接的那句」。
+        """
+        replied = normalize(self.store.get(group_id).last_reply_text or "")
+        current = frag.norm
+        if not current or not replied:
+            return False
+        # 比的是「用户这条 ↔ 上次 bot 接的那句」：命中区间起点是用户发的行，
+        # 两者一致说明群友复读了 bot 刚接的那句（接着唱），不是刷屏。
+        common = sum(1 for ch in current if ch in replied)
+        return common / max(1, len(current)) >= 0.8 and common / max(1, len(replied)) >= 0.8
 
     def _coverage_ok(self, raw: str, line: str, shape_score: float) -> bool:
         """保守复核：用户原句的内容词/字要基本都被命中的那行歌词覆盖。
@@ -582,7 +649,7 @@ class RelayEngine:
         shape: Shape,
         started: float,
     ) -> Outcome:
-        self.store.mark_replied(group_id, hit.song, user_id, now)
+        self.store.mark_replied(group_id, hit.song, user_id, now, hit.next_line or "")
         self.store.get(group_id).last_hit_key = f"{hit.song.key}#{hit.end}"
         self.stats["replied"] += 1
         # INFO 级别打一行「接了哪句」：群里「怎么没接上 / 接错了」时，
