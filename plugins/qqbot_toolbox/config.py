@@ -18,3 +18,8 @@ class Config(BaseModel):
 
     # /status 调用 OneBot 接口的超时时间（秒）
     qqbot_toolbox_status_timeout: float = Field(default=5.0, gt=0, description="/status 接口超时（秒）")
+
+    # /连通 单个端点的探测超时（秒）：太短会误报不通，太长会让命令卡很久
+    qqbot_toolbox_conn_timeout: float = Field(
+        default=8.0, gt=0, le=30, description="/连通 单个端点探测超时（秒）"
+    )

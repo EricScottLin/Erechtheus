@@ -7,6 +7,7 @@
 - ``/指令``    文本帮助菜单：**按指令列出所有用法**，``/指令 <指令名>`` 看单条详情
                 （``/help``、``帮助``、``菜单`` 由 nonebot-plugin-picmenu-next 提供图片菜单）
 - ``/status``  查询运行状态（收发消息数 / 已运行时长）
+- ``/连通``    检查到外部服务（模型 / 曲库 / B站等）的连通性，等价于在容器里 curl
 
 遵循 NoneBot 官方插件编写规范：
 https://nonebot.dev/docs/tutorial/create-plugin
@@ -32,6 +33,9 @@ __plugin_meta__ = PluginMetadata(
 /help            图片版完整菜单
 /ping            看看我还在不在、回应快不快
 /status          运行状态：收发消息数、已连续运行多久
+/连通            检查到外部服务的连通性（模型 / 曲库 / B站）
+/连通 <关键词>    只查匹配的端点，如 /连通 mistral
+/连通 <url>      直接测任意地址，如 /连通 https://api.mistral.ai
 /echo <内容>      原样回显，验证消息链路""",
     type="application",
     homepage="https://github.com/EricScottLin/Erechtheus",
@@ -40,6 +44,9 @@ __plugin_meta__ = PluginMetadata(
 )
 
 plugin_config: Config = get_plugin_config(Config)
+
+# 必须在 plugin_config 定义之后导入：connectivity 模块里依赖它
+from . import connectivity as connectivity  # noqa: E402,F401  （注册 /连通 命令）
 
 
 # ---------------------------------------------------------------- 工具函数
