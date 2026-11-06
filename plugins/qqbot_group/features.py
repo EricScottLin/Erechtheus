@@ -206,6 +206,36 @@ def list_features(group_id: int) -> list[tuple[str, str, bool]]:
     return [(key, _REGISTRY[key].name, is_enabled(group_id, key)) for key in _ORDER]
 
 
+def _command_names() -> set[str]:
+    """当前已加载插件的全部命令名与别名（小写）。
+
+    挖法与 qqbot_ai/typo.py 一致：matcher.rule 里每个 checker 的 ``call.cmds``
+    是命令元组（首项主名，其余别名）。注意 ``plugin.matcher`` 是**集合**不是字典。
+    """
+    names: set[str] = set()
+    try:
+        from nonebot import get_loaded_plugins
+
+        for plugin in get_loaded_plugins():
+            for matcher in getattr(plugin, "matcher", []) or []:
+                for checker in getattr(getattr(matcher, "rule", None), "checkers", []) or []:
+                    call = getattr(checker, "call", None) or checker
+                    for item in getattr(call, "cmds", None) or []:
+                        if isinstance(item, str):
+                            names.add(item.lower())
+                        elif isinstance(item, (tuple, list)):
+                            names.update(str(x).lower() for x in item if x)
+    except Exception:  # noqa: BLE001 —— 探测失败就退回普通提示，不影响开关
+        return set()
+    return names
+
+
+def _is_registered_command(word: str) -> bool:
+    """``word`` 是不是某个已加载插件的命令名/别名（如 curl、ping、什么歌）。"""
+    word = (word or "").strip().lstrip("/").lower()
+    return bool(word) and word in _command_names()
+
+
 def resolve_feature(text: str) -> Feature | None:
     """按 key / 中文名 / 别名 / 包含关系匹配功能。"""
     sync_external_features()
@@ -297,7 +327,19 @@ async def _do_toggle(
                 f"要{'开启' if enabled else '关闭'}哪个功能？可用的有：{names}\n"
                 "例如：/开启 待办"
             )
-        await matcher.finish(f"没找到功能「{shown}」，发 /本群功能 看看有哪些。")
+        # 用户拿「命令名」来开关时，说清它本来就不用开 —— 否则会被理解成
+        # 「这个功能不存在 / 需要开启」（2026-11-06 实际发生：/开启 curl）。
+        cmd = shown.lstrip("/")
+        if _is_registered_command(cmd):
+            await matcher.finish(
+                f"「/{cmd}」是个命令，直接发就能用，不用开启。\n"
+                f"/本群功能 里列的是能按群开关的功能（复读、歌词接龙这类）。"
+            )
+        await matcher.finish(
+            f"没找到功能「{shown}」。\n"
+            f"它也可能是某个命令 —— 命令直接发就能用，不需要开启；\n"
+            f"发 /本群功能 看看有哪些可开关的功能。"
+        )
 
     set_enabled(event.group_id, feature.key, enabled)
     flag = "✅ 已开启" if enabled else "❌ 已关闭"
