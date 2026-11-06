@@ -151,6 +151,17 @@ class TestResolveTargets(unittest.TestCase):
         self.assertEqual(conn._gateway_url(), "http://gw.local:3000/v1/models")
 
 
+class TestAliases(unittest.TestCase):
+    """命令注册时带了哪些别名（/curl 是用户最常打的写法，必须保留）。"""
+
+    def test_aliases_include_curl(self):
+        # conn_cmd 是 _FakeMatcher 实例，别名在创建时传进 on_command；
+        # 这里直接校验源码里的别名集合，避免依赖 NoneBot 运行时
+        src = (ROOT / "plugins" / "qqbot_toolbox" / "connectivity.py").read_text(encoding="utf-8")
+        for alias in ("curl", "连通性", "网络检查", "netcheck"):
+            self.assertIn(f'"{alias}"', src, f"别名 {alias} 丢了")
+
+
 class TestProbe(unittest.TestCase):
     def run_probe(self, url):
         return asyncio.run(conn.probe(url))

@@ -34,8 +34,9 @@ __plugin_meta__ = PluginMetadata(
 /ping            看看我还在不在、回应快不快
 /status          运行状态：收发消息数、已连续运行多久
 /连通            检查到外部服务的连通性（模型 / 曲库 / B站）
-/连通 <关键词>    只查匹配的端点，如 /连通 mistral
-/连通 <url>      直接测任意地址，如 /连通 https://api.mistral.ai
+                （别名：/curl /网络检查 /连通性 /netcheck）
+/连通 <关键词>    只查匹配的端点，如 /curl mistral
+/连通 <url>      直接测任意地址，如 /curl https://api.mistral.ai
 /echo <内容>      原样回显，验证消息链路""",
     type="application",
     homepage="https://github.com/EricScottLin/Erechtheus",

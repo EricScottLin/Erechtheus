@@ -7,6 +7,7 @@
 用法::
 
     /连通             检查所有预置端点
+    /curl             同上（别名：/curl /网络检查 /连通性 /netcheck）
     /连通 mistral     按关键词只查匹配的端点
     /连通 <url>       直接测任意地址（只允许 http/https）
 
@@ -142,7 +143,12 @@ async def probe(url: str) -> tuple[bool, str]:
 
 
 # ---------------------------------------------------------------- 命令
-conn_cmd = on_command("连通", aliases={"连通性", "网络检查", "curl"}, priority=5, block=True)
+conn_cmd = on_command(
+    "连通",
+    aliases={"连通性", "网络检查", "curl", "网络连通", "连通检查", "netcheck"},
+    priority=5,
+    block=True,
+)
 
 
 @conn_cmd.handle()
