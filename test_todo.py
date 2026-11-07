@@ -289,6 +289,45 @@ async def main() -> None:
     bot = await send("/待办 标签 2 #群管 #bug")
     check("/待办 标签", store.get_task(2)["tags"] == ["群管", "bug"], bot.last())
 
+    # ---------------- 优化：排序 / 搁置 / 详情 ----------------
+    # 同级内放得越久越靠前
+    old_task = await store.add_task("放很久的一条", by=str(SUPER))
+    await store.update_task(old_task["id"], str(SUPER), priority=3)
+    # 把它伪装成 10 天前创建
+    data = json.loads(store.tasks_file().read_text(encoding="utf-8"))
+    for tk in data["tasks"]:
+        if tk["id"] == old_task["id"]:
+            tk["created_at"] -= 10 * 86400
+            tk["history"] = []
+    store.tasks_file().write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    store.reset_cache()
+    active = store.active_tasks()
+    same_prio = [t for t in active if t["priority"] == 3]
+    check("同级内搁置久的排前面", same_prio and same_prio[0]["id"] == old_task["id"], str([(t["id"], t["title"]) for t in same_prio]))
+    check("age_days 计算", H.age_days(store.get_task(old_task["id"])) >= 10, str(H.age_days(store.get_task(old_task["id"]))))
+    check("is_stale 判定", H.is_stale(store.get_task(old_task["id"])) is True)
+    bot = await send("/待办")
+    check("列表显示搁置天数", "搁置" in bot.last(), bot.last())
+    check("列表有搁置提醒", "考虑推进或放弃" in bot.last(), bot.last())
+
+    bot = await send("/待办 列表 最近")
+    check("/待办 列表 最近", "最近" in bot.last(), bot.last())
+    bot = await send("/待办 列表 最久")
+    check("/待办 列表 最久 把老的排前面", bot.last().index(f"#{old_task['id']}") < bot.last().index("#2"), bot.last())
+
+    bot = await send(f"/待办 详情 {old_task['id']}")
+    detail = bot.last()
+    check("详情有状态优先级", "状态：" in detail and "优先级：" in detail, detail)
+    check("详情有创建与天数", "创建：" in detail and "天前" in detail, detail)
+    check("详情标记搁置", "搁置" in detail, detail)
+
+    bot = await send(f"/待办 标签 {old_task['id']} #历史")
+    bot = await send("/待办 列表 #历史")
+    check("按标签筛选", f"#{old_task['id']}" in bot.last(), bot.last())
+    bot = await send("/待办 列表 #不存在的标签")
+    check("标签无结果有提示", "没有标签" in bot.last(), bot.last())
+    await store.set_status(old_task["id"], "dropped", str(SUPER))
+
     # ---------------- 提醒 ----------------
     bot = await send("/待办 提醒 2 3天后")
     t2 = store.get_task(2)

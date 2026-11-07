@@ -328,8 +328,28 @@ def fmt_relative(ts: int, now: Optional[datetime] = None) -> str:
     return f"{text}后" if future else f"{text}前"
 
 
-def line(task: dict[str, Any], show_id: bool = True) -> str:
-    """群聊里的一行显示。"""
+# 超过这么多天没动，视为「搁置中」
+STALE_DAYS = 7
+
+
+def age_days(task: dict[str, Any], now: float | None = None) -> int:
+    """距上次变更多久（天）；新建 / 有历史动作都算变更。"""
+    now = time.time() if now is None else now
+    stamps = [int(task.get("created_at") or 0)]
+    stamps += [int(h.get("at") or 0) for h in task.get("history") or []]
+    last = max(stamps) if stamps else 0
+    return max(0, int((now - last) // 86400))
+
+
+def is_stale(task: dict[str, Any], now: float | None = None) -> bool:
+    return task.get("status") in ("open", "doing") and age_days(task, now) >= STALE_DAYS
+
+
+def line(task: dict[str, Any], show_id: bool = True, show_age: bool = True) -> str:
+    """群聊里的一行显示。
+
+    例：``❗ #3 修复梗别名 #群管 · 搁置 9天 ⏰10-21 15:10``
+    """
     head = PRIORITY_MARKS.get(task.get("priority", 3), "▪️")
     status = task.get("status")
     if status == "doing":
@@ -346,7 +366,15 @@ def line(task: dict[str, Any], show_id: bool = True) -> str:
     remind = ""
     if task.get("remind_at") and status in ("open", "doing"):
         remind = f" ⏰{fmt_time(task['remind_at'])}"
-    return f"{head} {ident} {title}{tags}{remind}".replace("  ", " ").strip()
+    age = ""
+    if show_age:
+        days = age_days(task)
+        if status in ("open", "doing"):
+            if days >= STALE_DAYS:
+                age = f" · 搁置{days}天"
+            elif days >= 1:
+                age = f" · {days}天"
+    return f"{head} {ident} {title}{tags}{age}{remind}".replace("  ", " ").strip()
 
 
 def list_text(tasks: list[dict[str, Any]], title: str = "📋 待办", empty: str = "没有待办。用「我要做 <任务>」添加。") -> str:

@@ -204,8 +204,24 @@ def active_tasks() -> list[dict[str, Any]]:
     return sort_active(tasks)
 
 
-def sort_active(tasks: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    return sorted(tasks, key=lambda t: (t["priority"], t["id"]))
+def _last_touched_ms(task: dict[str, Any]) -> int:
+    stamps = [int(task.get("created_at") or 0)]
+    stamps += [int(h.get("at") or 0) for h in task.get("history") or []]
+    return max(stamps) if stamps else 0
+
+
+def sort_active(tasks: list[dict[str, Any]], order: str = "priority") -> list[dict[str, Any]]:
+    """未完成待办的排序。
+
+    - ``priority``（默认）：优先级优先，同级里放得越久越靠前（先清陈年老账）
+    - ``new``：最近新建 / 变更的在前
+    - ``old``：搁置最久的在前
+    """
+    if order == "new":
+        return sorted(tasks, key=lambda t: (_last_touched_ms(t), t["id"]), reverse=True)
+    if order == "old":
+        return sorted(tasks, key=lambda t: (_last_touched_ms(t), t["id"]))
+    return sorted(tasks, key=lambda t: (t["priority"], _last_touched_ms(t), t["id"]))
 
 
 def get_task(task_id: int) -> dict[str, Any] | None:

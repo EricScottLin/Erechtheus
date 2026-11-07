@@ -11,7 +11,7 @@ from typing import Any, Optional
 # ---------------------------------------------------------------- 主命令词
 MAIN_ALIASES = {
     "做": "add", "新建": "add", "添加": "add", "记": "add",
-    "列表": "list", "查看": "list",
+    "列表": "list", "查看": "list", "详情": "show", "show": "show",
     "完成": "done", "做完": "done", "搞定": "done", "我做完了": "done", "完成了": "done",
     "别完成了": "done", "别做完了": "done",
     "删除": "del", "删掉": "del", "移除": "del", "删": "del",
@@ -92,14 +92,14 @@ def parse_command(sub: str, rest: list[str]) -> Action:
 
     word, tail = _split_head(rest)
     # 命令词后面粘着文字（「完成3」经上面拆分后 first 仍是「完成」）时，把命令词本身去掉
-    if name in ("done", "del", "drop", "start", "edit", "prio", "note", "tag", "remind", "record"):
+    if name in ("done", "del", "drop", "start", "edit", "prio", "note", "tag", "remind", "record", "show"):
         for alias, action_name in MAIN_ALIASES.items():
             if action_name == name and word == alias:
                 first, _, rest_text = tail.partition(" ")
                 word, tail = first, rest_text
                 break
 
-    if name in ("done", "del", "drop", "start", "edit", "prio", "note", "tag", "remind", "record"):
+    if name in ("done", "del", "drop", "start", "edit", "prio", "note", "tag", "remind", "record", "show"):
         # 「完成 3」「改 3 新标题」：第一个参数是目标
         if not word and name == "done":
             return Action("list", value="完成")

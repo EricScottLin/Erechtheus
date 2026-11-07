@@ -56,7 +56,11 @@ from .helpers import (
     export_json,
     export_markdown,
     fmt_relative,
+    STALE_DAYS,
+    age_days,
+    fmt_time,
     is_fresh,
+    is_stale,
     line,
     list_text,
     normalize_spaces,
@@ -566,20 +570,93 @@ async def handle_todo(event: MessageEvent) -> None:
     await handler(event, action)
 
 
+_LIST_MODES = {
+    "完成": "done", "已完成": "done", "done": "done",
+    "全部": "all", "all": "all", "历史": "all",
+    "最近": "new", "最新": "new", "new": "new",
+    "最久": "old", "搁置": "old", "old": "old",
+}
+
+
 async def _cmd_list(event: MessageEvent, action: Action) -> None:
-    sub = (action.value or "").strip()
-    if sub in ("完成", "已完成", "done"):
+    """``/待办 列表 [完成|全部|最近|最久] [#标签]``。"""
+    arg = _deglue(f"{action.value or ''} {action.extra.get('rest') or ''}")
+    words = arg.split()
+    mode, tag = "active", ""
+    for w in words:
+        key = w.lower()
+        if key in _LIST_MODES:
+            mode = _LIST_MODES[key]
+        elif w.startswith(("#", "＃")):
+            tag = w.lstrip("#＃")
+        elif w in ("_",) or not w:
+            continue
+
+    if mode == "done":
         tasks = [t for t in store.all_tasks() if t["status"] == "done"]
         await todo.finish(list_text(tasks, "✅ 已完成的待办", "还没有完成的待办。"))
-    if sub in ("全部", "all", "历史"):
+    if mode == "all":
         tasks = store.all_tasks()
-        body = list_text(tasks, "📚 全部待办", "还是空的。")
-        await todo.finish(body + f"\n\n{summarize(tasks)}")
+        await todo.finish(list_text(tasks, "📚 全部待办", "还是空的。") + f"\n\n{summarize(tasks)}")
+
     tasks = store.active_tasks()
+    if tag:
+        tasks = [t for t in tasks if tag in (t.get("tags") or [])]
+    if mode in ("new", "old"):
+        tasks = store.sort_active(tasks, mode)
     if not tasks:
-        await todo.finish("📭 待办是空的。要记就发：我要做 <任务>")
-    body = list_text(tasks, f"📋 待办（{len(tasks)} 条）")
-    await todo.finish(body + f"\n\n{summarize(store.all_tasks())}")
+        hint = f"没有标签 #{tag} 的待办。" if tag else "📭 待办是空的。要记就发：我要做 <任务>"
+        await todo.finish(hint)
+
+    stale = [t for t in tasks if is_stale(t)]
+    title = f"📋 待办（{len(tasks)} 条）"
+    if tag:
+        title += f" #{tag}"
+    if mode == "new":
+        title += "· 最近"
+    elif mode == "old":
+        title += "· 最久"
+    body = list_text(tasks, title)
+    stats = summarize(store.all_tasks())
+    if stale:
+        stats += f"\n⏳ 有 {len(stale)} 条搁置超过 {STALE_DAYS} 天，考虑推进或放弃"
+    await todo.finish(f"{body}\n\n{stats}")
+
+
+async def _cmd_show(event: MessageEvent, action: Action) -> None:
+    """``/待办 详情 <编号>``：完整信息 + 历史。"""
+    task, err = _resolve_fuzzy(event, action.target or "")
+    if err:
+        await todo.finish(err)
+    t = task
+    lines = [
+        f"📄 #{t['id']} {t['title']}",
+        f"状态：{store.STATUS_LABELS.get(t['status'], t['status'])}　优先级：{PRIORITY_LABELS[t['priority']]}",
+        f"创建：{fmt_time(t['created_at'])}（{age_days(t)} 天前）",
+    ]
+    if t.get("done_at"):
+        lines.append(f"结束：{fmt_time(t['done_at'])}")
+    if t.get("remind_at"):
+        lines.append(f"提醒：{fmt_time(t['remind_at'])}" + ("（已提醒）" if t.get("reminded") else ""))
+    if t.get("tags"):
+        lines.append("标签：" + "".join(f" #{x}" for x in t["tags"]))
+    if t.get("note"):
+        lines.append(f"备注：{t['note']}")
+    if t.get("dsh_task_id"):
+        lines.append(f"DSH：{t['dsh_task_id']}")
+    if is_stale(t):
+        lines.append(f"⏳ 已搁置 {age_days(t)} 天")
+    hist = (t.get("history") or [])[-5:]
+    if hist:
+        actions = {"create": "新建", "done": "完成", "dropped": "放弃", "open": "重开",
+                   "doing": "开始", "edit": "改名", "prio": "改优先级", "note": "改备注",
+                   "tag": "改标签", "remind": "设提醒", "record": "关联DSH"}
+        lines.append("最近动作：")
+        for h in hist:
+            act = actions.get(h.get("action"), h.get("action"))
+            detail = f"（{h['detail']}）" if h.get("detail") else ""
+            lines.append(f"　{fmt_time(int(h.get('at') or 0))} {act}{detail}")
+    await todo.finish("\n".join(lines))
 
 
 async def _cmd_add(event: MessageEvent, action: Action) -> None:
@@ -838,6 +915,7 @@ async def _cmd_help(event: MessageEvent, action: Action) -> None:
 
 _HANDLERS = {
     "list": _cmd_list,
+    "show": _cmd_show,
     "add": _cmd_add,
     "done": _cmd_done,
     "del": _cmd_del,
