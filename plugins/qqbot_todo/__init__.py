@@ -205,6 +205,20 @@ def _looks_like_task(rest: str) -> bool:
     return True
 
 
+def _is_asking_todo(rest: str) -> bool:
+    """「我要做什么」「我该做啥」「我能做点啥」这类在问「有什么待办」。
+
+    这类消息不记任务，而是**回一份待办列表**。
+    """
+    bare = (rest or "").strip().strip("？?。.!！").strip()
+    if not bare:
+        return False
+    if bare in _QUESTION_WORDS:
+        return True
+    # 「做什么好呢」「干点啥」等，长度短且以疑问收尾
+    return len(bare) <= 6 and bool(_QUESTION_END_RE.search(bare))
+
+
 def _todo_trigger(event: MessageEvent) -> bool:
     """这条消息是不是「待办」相关的命令（**只认明确写法**）。
 
@@ -218,7 +232,9 @@ def _todo_trigger(event: MessageEvent) -> bool:
     if _LEAD_RE.match(text):
         rest = _lead_rest(text)
         if _has_explicit_prefix(event):  # /我要做 …、@机器人 我要做 …
-            return bool(rest)  # 只发「/我要做」也给用法提示
+            return True  # 只发「/我要做」也进处理函数，给用法提示
+        if _is_asking_todo(rest):
+            return True  # 「我要做什么」→ 回待办列表
         # 裸消息：「我要做点作业」是聊天，「我要做 修个 bug」才是待办
         return _looks_like_task(rest)
     first = text.split(maxsplit=1)[0] if text.split() else ""
@@ -230,8 +246,16 @@ def _lead_rule(event: MessageEvent) -> bool:
 
 
 def _denied_lead(event: MessageEvent) -> bool:
-    """非超管发了待办命令（/待办、/我要做）：温柔拒绝一次，不做任何事。"""
-    return _todo_trigger(event)
+    """非超管发了**明确的**待办命令（/待办、/我要做 X）：温柔拒绝一次。
+
+    注意排除「我要做什么」这类口语提问：群里每天都有人问，回了就是刷屏骚扰。
+    """
+    if not _todo_trigger(event):
+        return False
+    rest = _lead_rest(_lead_text(event))
+    if _is_asking_todo(rest) and not _has_explicit_prefix(event):
+        return False  # 「我要做什么」裸问：当普通聊天，静默
+    return True
 
 
 def _is_not_superuser(event: MessageEvent) -> bool:
@@ -418,9 +442,17 @@ async def handle_lead(event: MessageEvent) -> None:
         text = joined
     rest = m.group("rest").strip()
     # 统一用 _looks_like_task 判断（和规则层同一套）：
-    # 「我要做什么」「我要做点作业」是聊天不记；「我要做 修复xx」照记
-    if not rest and _has_explicit_prefix(event):
-        await lead_todo.finish("要做啥？发「我要做 <任务>」，例如：我要做 给群管插件加个冷却")
+    # 「我要做什么」-> 回待办列表；「我要做点作业」-> 聊天不记；「我要做 修复xx」-> 记
+    if not rest:
+        if _has_explicit_prefix(event):  # 只发了「/我要做」：提示写法
+            await lead_todo.finish("要做啥？发「我要做 <任务>」，例如：我要做 给群管插件加个冷却")
+        return
+    if _is_asking_todo(rest):
+        # 只有「本群开了待办且是超管」才回列表，否则当聊天静默
+        if _session_denial(event):
+            return
+        await _cmd_list(event, Action("list"), lead_todo)
+        return
     if not _looks_like_task(rest):
         return
     if _session_denial(event):
@@ -578,8 +610,14 @@ _LIST_MODES = {
 }
 
 
-async def _cmd_list(event: MessageEvent, action: Action) -> None:
-    """``/待办 列表 [完成|全部|最近|最久] [#标签]``。"""
+async def _cmd_list(
+    event: MessageEvent, action: Action, matcher=None
+) -> None:
+    """``/待办 列表 [完成|全部|最近|最久] [#标签]``。
+
+    ``matcher`` 允许从「我要做什么」等其他入口调用时回消息到正确的响应器。
+    """
+    reply = matcher or todo
     arg = _deglue(f"{action.value or ''} {action.extra.get('rest') or ''}")
     words = arg.split()
     mode, tag = "active", ""
@@ -594,10 +632,10 @@ async def _cmd_list(event: MessageEvent, action: Action) -> None:
 
     if mode == "done":
         tasks = [t for t in store.all_tasks() if t["status"] == "done"]
-        await todo.finish(list_text(tasks, "✅ 已完成的待办", "还没有完成的待办。"))
+        await reply.finish(list_text(tasks, "✅ 已完成的待办", "还没有完成的待办。"))
     if mode == "all":
         tasks = store.all_tasks()
-        await todo.finish(list_text(tasks, "📚 全部待办", "还是空的。") + f"\n\n{summarize(tasks)}")
+        await reply.finish(list_text(tasks, "📚 全部待办", "还是空的。") + f"\n\n{summarize(tasks)}")
 
     tasks = store.active_tasks()
     if tag:
@@ -606,7 +644,7 @@ async def _cmd_list(event: MessageEvent, action: Action) -> None:
         tasks = store.sort_active(tasks, mode)
     if not tasks:
         hint = f"没有标签 #{tag} 的待办。" if tag else "📭 待办是空的。要记就发：我要做 <任务>"
-        await todo.finish(hint)
+        await reply.finish(hint)
 
     stale = [t for t in tasks if is_stale(t)]
     title = f"📋 待办（{len(tasks)} 条）"
@@ -620,7 +658,7 @@ async def _cmd_list(event: MessageEvent, action: Action) -> None:
     stats = summarize(store.all_tasks())
     if stale:
         stats += f"\n⏳ 有 {len(stale)} 条搁置超过 {STALE_DAYS} 天，考虑推进或放弃"
-    await todo.finish(f"{body}\n\n{stats}")
+    await reply.finish(f"{body}\n\n{stats}")
 
 
 async def _cmd_show(event: MessageEvent, action: Action) -> None:
