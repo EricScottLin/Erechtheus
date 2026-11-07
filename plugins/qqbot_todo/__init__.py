@@ -161,7 +161,15 @@ def _has_explicit_prefix(event: Any) -> bool:
     return text.startswith(starts)
 
 
-_CHATTY_TAIL_RE = re.compile(r"^(点|点些|点个|些|个|一件|点儿|点啥)")
+# 「我要做」后面是这些，就是在问 / 在闲聊，不是任务名
+_QUESTION_WORDS = frozenset(
+    {
+        "什么", "啥", "什么啊", "什么呀", "啥呀", "什么好", "什么好呢", "什么来着",
+        "干嘛", "干什么", "干些啥", "干点啥", "做什么", "做点啥", "做些什么",
+    }
+)
+# 一句问话的典型收尾（「我要做什么才知道」这种明显是提问）
+_QUESTION_END_RE = re.compile(r"(呢|吗|么|嘛|什么|啥)[？?。.!！]*$")
 
 
 def _lead_rest(text: str) -> str:
@@ -171,10 +179,26 @@ def _lead_rest(text: str) -> str:
 
 
 def _looks_like_task(rest: str) -> bool:
-    """任务名是否像样：空的不算，「我要做点作业」这种明显是聊天的不算。"""
-    if not rest:
+    """任务名是否像样。
+
+    这些算聊天、不当待办：``我要做什么`` / ``我要做啥`` / ``我要做点作业`` /
+    ``我要做什么好呢``。判断顺序：
+    1. 去掉尾部标点后就是疑问词 → 聊天
+    2. 以「点/些/个/一件」开头（「我要做点作业」）→ 聊天
+    3. 以疑问语气收尾且很短（≤6 字，「我要做什么才知道」）→ 聊天
+    4. 否则视为任务名（「我要做 修复误触发购买」）
+    """
+    raw = (rest or "").strip()
+    bare = raw.strip("？?。.!！").strip()
+    if not bare:
         return False
-    return not _CHATTY_TAIL_RE.match(rest)
+    if bare in _QUESTION_WORDS:
+        return False
+    if re.match(r"^(点|些|个|一件|点儿|点啥|点些|点个)", bare):
+        return False
+    if len(bare) <= 6 and _QUESTION_END_RE.search(bare):
+        return False
+    return True
 
 
 def _todo_trigger(event: MessageEvent) -> bool:
@@ -389,13 +413,14 @@ async def handle_lead(event: MessageEvent) -> None:
             return
         text = joined
     rest = m.group("rest").strip()
-    # 裸「我要做点作业」多半是聊天，不记；带 / 前缀时一律记
-    if not _has_explicit_prefix(event) and (not rest or re.match(r"^(点|些|个|一件|点儿)", rest)):
+    # 统一用 _looks_like_task 判断（和规则层同一套）：
+    # 「我要做什么」「我要做点作业」是聊天不记；「我要做 修复xx」照记
+    if not rest and _has_explicit_prefix(event):
+        await lead_todo.finish("要做啥？发「我要做 <任务>」，例如：我要做 给群管插件加个冷却")
+    if not _looks_like_task(rest):
         return
     if _session_denial(event):
         return
-    if not rest:
-        await lead_todo.finish("要做啥？发「我要做 <任务>」，例如：我要做 给群管插件加个冷却")
     await _add_from_quick(event, f"{m.group('marks')}{rest}", text, lead_todo)
 
 

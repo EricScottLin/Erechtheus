@@ -374,7 +374,8 @@ async def main() -> None:
     check("群里非超管仍被拒并提示", "超级用户" in bot.last(), str(bot.calls))
 
     # 回归：普通聊天绝不能被当成待办命令（2026-11-05 线上误判事故）
-    for chat in ["/来5张claude", "？", "开户卡在哪一步了？", "哈哈哈哈", "我要做点作业"]:
+    for chat in ["/来5张claude", "？", "开户卡在哪一步了？", "哈哈哈哈", "我要做点作业",
+                 "我要做什么", "我要做啥", "我要干嘛", "我要做点作业"]:
         bot = await send(chat, user_id=OTHER, group=True)
         check(f"群友普通消息不误报：{chat}", bot.calls == [], str(bot.calls))
     # 引用回复 + @ 也不能触发
@@ -383,6 +384,14 @@ async def main() -> None:
     )
     bot = await send(reply_like, user_id=OTHER, group=True)
     check("引用+@ 的普通消息不误报", bot.calls == [], str(bot.calls))
+    # 「我要做什么」不能被记成任务「什么」（2026-11-07 误记事故）
+    before = len(store.all_tasks())
+    bot = await send("我要做什么")
+    check("「我要做什么」不记任务", len(store.all_tasks()) == before and "记下了" not in bot.last(), bot.last())
+    # 但带空格的真任务照常记
+    bot = await send("我要做 修复误触发购买")
+    check("「我要做 修复误触发购买」正常记", "修复误触发购买" in bot.last(), bot.last())
+
     # 真正的待办命令仍然拒绝
     bot = await send("/待办", user_id=OTHER, group=True)
     check("非超管 /待办 仍给拒绝提示", "超级用户" in bot.last(), str(bot.calls))
