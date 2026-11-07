@@ -166,6 +166,26 @@ def _text_of(event: MessageEvent) -> str:
     return "\n".join(lines)
 
 
+# 明显是「在跟机器人说话」的口语/指令词：@机器人 后带这些字，就不是在发歌词
+_CHAT_WORDS = (
+    "小e", "小 e", "怎么", "为什么", "为啥", "什么", "啥意思", "是不是", "能不能",
+    "可以吗", "帮我", "看看", "问一下", "问下", "解释", "翻译", "查一下", "查查",
+    "在吗", "在不在", "你好", "谢谢", "收到", "辛苦了", "吗", "呢", "吧", "啊",
+    "呀", "嘛", "哦", "啦", "？", "?",
+)
+
+
+def _looks_like_chat(text: str) -> bool:
+    """这句是不是「跟机器人搭话」而不是「在发歌词」。
+
+    @机器人 是最强的「有意整活」信号（``explicit`` 会加版式分），但它同时
+    也是「在跟机器人说话」的信号：2026-11-06 群友 @bot 问「这是怎么触发的呢」，
+    被当成歌词接了下一句。这里用口语/指令词做一道粗筛，只挡最明显的对话。
+    """
+    low = (text or "").lower()
+    return any(word in low for word in _CHAT_WORDS)
+
+
 async def _quoted_text(bot: Bot, event: MessageEvent) -> str:
     """被引用消息的文字（引用消息常用来「点名某句歌词」）。"""
     reply = getattr(event, "reply", None)
@@ -198,6 +218,11 @@ async def _handle_relay(bot: Bot, event: GroupMessageEvent) -> None:
         explicit = True
     # 命令（/xxx）不参与接龙
     if text.startswith(("/", "／")):
+        return
+    # @机器人 后的「跟机器人说话」不像歌词（「@bot 这是怎么触发的呢」）：
+    # explicit 会给版式加分，正好能把这类闲聊推过门槛，这里先挡一道。
+    if explicit and not quoted and _looks_like_chat(text):
+        logger.debug(f"[qqbot_lyric] @机器人 的内容像在对话，不接：{text!r}")
         return
 
     lock = _lock_for(event.group_id)

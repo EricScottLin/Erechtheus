@@ -43,6 +43,15 @@ _CJK_CHAR = re.compile(r"[\u3040-\u30ff\u4e00-\u9fff]")
 _TIMEOUT = object()
 
 
+def _content_chars(text: str) -> str:
+    """只留「有内容」的字符（中日韩字 + 英数），标点/空格/emoji 不算。
+
+    「这个好看」= 4 个字，和曲库里那一行一模一样；「？？？」= 0 个字。
+    精确命中路径用它判断「短到不足以当歌词」。
+    """
+    return "".join(ch for ch in (text or "") if ch.isalnum() or _CJK_CHAR.match(ch))
+
+
 @dataclass
 class Outcome:
     """一次判定 + 接龙的结果。"""
@@ -225,6 +234,10 @@ class RelayEngine:
                     # 一句闲聊（「思劳牧慢速」）只要碰巧撞上歌里某行就会被接，
                     # 群里看着就是「接歌词的时候乱接别人的话」。
                     if decision != "obvious":
+                        continue
+                    # 太短的（「这个好看」「真的吗」）一律不接：它们在任何歌里
+                    # 都可能是单独一行，撞上的概率远高于「真在唱」。
+                    if not self._long_enough(frag):
                         continue
                     hit = await self._match_in_song(state.song, combo)
                     if hit is None:
@@ -546,14 +559,26 @@ class RelayEngine:
         return True
 
     def _local_exact_hit(self, frags: list[Fragment]) -> Optional[Hit]:
-        """本地歌词索引里的精确命中（之前接过这首歌就零网络可接）。"""
+        """本地歌词索引里的精确命中（之前接过这首歌就零网络可接）。
+
+        走这条路时**没有版式分、没有覆盖度复核、也没有模型**，所以必须在这里
+        卡最短长度：曲库里满是「这个好看」「为什么」「我知道」这种一行的口语，
+        群友正常聊天撞上去就会被接下一句（2026-11-06「这个好看」→「滚」）。
+        """
         if not frags:
+            return None
+        if not self._long_enough(frags[-1]):
             return None
         text = frags[-1].text
         for hit in exact_hits(self.library, text):
             if hit.next_line:
                 return hit
         return None
+
+    def _long_enough(self, frag: Fragment) -> bool:
+        """这条片段的内容够不够「像一句歌词」（见 ``qqbot_lyric_min_match_chars``）。"""
+        limit = int(getattr(self.config, "qqbot_lyric_min_match_chars", 6))
+        return len(_content_chars(frag.text)) >= limit
 
     @staticmethod
     def _solo_combo(
@@ -603,7 +628,10 @@ class RelayEngine:
         # a) 本地索引里已经有这句（之前接过这首歌）→ 零网络，但也要过保守复核
         #    （「誰も知らない」能被《知らない》里单独一行「知らない」以 0.83 命中，
         #    可这句其实是另一首歌的，只对上一部分不算数）
+        #    同样要卡最短长度：短句在曲库里几乎都是口语行，撞上就接等于乱接。
         for frag in reversed(frags):
+            if not self._long_enough(frag):
+                continue
             entries = self.library.index.lookup(frag.norm)
             for song, idx in entries:
                 lines = self.library.index.lines_of(song)

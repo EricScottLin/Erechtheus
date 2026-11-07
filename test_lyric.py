@@ -695,5 +695,70 @@ class TestRelayContinuation(unittest.TestCase):
         self.assertEqual(second.hit.song.title, "小幸运")
 
 
+class TestShortLineGuard(unittest.TestCase):
+    """短句不许当歌词接（2026-11-06 线上：「这个好看」被接了「滚」）。
+
+    复现条件：曲库里有一行短口语（佩奇原声《双标的佩奇》里「这个好看」的
+    下一行就是「滚」），群友正常聊天发「这个好看」→ 本地索引精确命中 →
+    零网络、零模型，直接接「滚」。这类短句在曲库里大量存在
+    （「为什么」「无所谓」「我知道」…），必须卡最短长度。
+    """
+
+    PEPPA = [
+        "佩奇洗澡内容流出",
+        "嘿嘿",
+        "这个好看",
+        "滚",
+        "天呐",
+        "看来我的家人都被这个土豆搞魔了",
+    ]
+
+    def build(self, **cfg):
+        lib = FakeLibrary({"双标的佩奇|芸风墨客": self.PEPPA})
+        jd = FakeJudge({})  # 任何模型调用都会返回 CHAT：验证全程不需要模型
+        engine = relay.RelayEngine(make_config(**cfg), lib, jd, state.RelayStore())
+        return engine, lib, jd
+
+    def test_short_chat_line_not_relayed(self):
+        """「这个好看」是正常聊天，不能因为曲库里恰好有这一行就接「滚」。"""
+        engine, _, jd = self.build()
+        out = asyncio.run(engine.handle(1, "这个好看", "u1", ts=100.0))
+        self.assertFalse(out.replied, out)
+        self.assertEqual(out.status, "chat")
+        self.assertEqual(jd.calls, [])
+
+    def test_short_chat_line_not_relayed_in_window(self):
+        """接龙窗口内发短句也不能被接（窗口内没有模型复核）。"""
+        lib = FakeLibrary({"双标的佩奇|芸风墨客": self.PEPPA})
+        engine = relay.RelayEngine(
+            make_config(qqbot_lyric_cooldown=45), lib, FakeJudge({}), state.RelayStore()
+        )
+        first = asyncio.run(engine.handle(1, "佩奇洗澡内容流出", "u1", ts=100.0))
+        self.assertTrue(first.replied, first)
+        self.assertEqual(first.hit.next_line, "嘿嘿")
+        chat = asyncio.run(engine.handle(1, "这个好看", "u2", ts=104.0))
+        self.assertFalse(chat.replied, chat)
+
+    def test_long_lyric_line_still_relayed(self):
+        """长度门槛不能误伤真歌词：够长的那句照样接。"""
+        lib = FakeLibrary({"晴天|周杰伦": QINGTIAN})
+        engine = relay.RelayEngine(make_config(), lib, FakeJudge({}), state.RelayStore())
+        out = asyncio.run(engine.handle(1, "故事的小黄花", "u1", ts=100.0))
+        self.assertTrue(out.replied, out)
+        self.assertEqual(out.hit.next_line, "从出生那年就飘着")
+
+    def test_min_match_chars_configurable(self):
+        """门槛可配置：调低到 2 时短句又能命中（万一有群就想这么用）。"""
+        engine, _, _ = self.build(qqbot_lyric_min_match_chars=2)
+        out = asyncio.run(engine.handle(1, "这个好看", "u1", ts=100.0))
+        self.assertTrue(out.replied, out)
+        self.assertEqual(out.hit.next_line, "滚")
+
+    def test_content_chars_ignores_punctuation(self):
+        self.assertEqual(relay._content_chars("这个好看"), "这个好看")
+        self.assertEqual(relay._content_chars("？？？"), "")
+        self.assertEqual(relay._content_chars("行,那就这样"), "行那就这样")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

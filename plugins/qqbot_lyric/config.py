@@ -189,6 +189,17 @@ class Config(BaseModel):
     )
 
     # ---- 匹配 ----
+    qqbot_lyric_min_match_chars: int = Field(
+        default=6, ge=2, le=30,
+        description=(
+            "「整行精确命中」要求的最少有效字数（中日韩字 + 英数，标点空格不算）。"
+            "太短的日常短语在曲库里大量存在 —— 佩奇原声《双标的佩奇》里就有一行"
+            "「这个好看」，下一行是「滚」；2026-11-06 群友正常聊天「这个好看」"
+            "被接了「滚」，走的就是这条路径（exact 命中，零网络、零模型）。"
+            "6 是实测值：低于 6 字的行（「为什么」「无所谓」「我知道」）几乎都是口语，"
+            "而真实歌词片段（「从前从前有个人爱你很久」）远长于此"
+        ),
+    )
     qqbot_lyric_min_score: float = Field(
         default=0.78, ge=0.5, le=1.0,
         description=(
