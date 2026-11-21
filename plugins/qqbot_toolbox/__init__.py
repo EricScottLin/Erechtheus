@@ -50,6 +50,7 @@ plugin_config: Config = get_plugin_config(Config)
 
 # 必须在 plugin_config 定义之后导入：connectivity 模块里依赖它
 from . import connectivity as connectivity  # noqa: E402,F401  （注册 /连通 命令）
+from . import netcheck as netcheck  # noqa: E402  （真 curl / ICMP / TCP 探测）
 
 
 # ---------------------------------------------------------------- 工具函数
@@ -123,20 +124,87 @@ async def handle_ping(
 
 
 async def _ping_target(event: MessageEvent, target: str, prefix: Message) -> None:
-    """``/ping <域名或地址>``：测这个目标是不是连得通（和 /curl 同一口径）。"""
-    targets, error = connectivity.resolve_targets(target, raw_host=True)
-    if error:
-        await ping.finish(prefix + error)
+    """``/ping <IP|域名|URL>``：真调 curl / ICMP / TCP 去测这个目标。
 
-    lines = ["🏓 ping " + target]
-    for t in targets:
-        ok, detail = await connectivity.probe(t.url)
-        lines.append(f"  {'✅' if ok else '❌'} {detail}")
-    if len(targets) > 1:
-        bad = sum(1 for line in lines[1:] if "❌" in line)
-        lines.append(f"  ────── {len(targets) - bad}/{len(targets)} 通")
-    lines.append("  （想看更细的连通性检查用 /curl）")
+    带 URL：跑真实 curl，报状态码、DNS/连接耗时、耗时、远端 IP。
+    带 IP/域名：先发 ICMP ping（拿 RTT），拿不到就退回 TCP 连接探测。
+    """
+    ep, error = netcheck.parse_endpoint(target)
+    if error or ep is None:
+        await ping.finish(prefix + "🏓 " + error)
+
+    timeout = plugin_config.qqbot_toolbox_conn_timeout
+    lines = [f"🏓 ping {ep.display}"]
+    try:
+        if ep.url:
+            r = await netcheck.curl_probe(ep.url, timeout=timeout)
+            lines += _format_curl(r, ep)
+        else:
+            r = await netcheck.ping(
+                ep.host, timeout=min(3.0, timeout), port=ep.port
+            )
+            lines += _format_ping(r, ep)
+    except Exception as e:  # noqa: BLE001 —— 探测再炸也得回一句
+        lines.append(f"  ⚠️ 探测出错：{type(e).__name__}")
     await ping.finish(prefix + "\n".join(lines))
+
+
+def _format_curl(r: dict, ep: netcheck.Endpoint) -> list[str]:
+    """把 curl 结果整理成群里能看懂的两三行。"""
+    if not r.get("ok"):
+        return [f"  ❌ {r.get('error', '请求失败')}"]
+
+    code = r.get("http_code", "000")
+    total = r.get("time_total", 0.0) * 1000
+    dns = r.get("time_namelookup", 0.0) * 1000
+    conn = r.get("time_connect", 0.0) * 1000
+    ip = r.get("remote_ip") or "?"
+    return [
+        f"  ✅ HTTP {code}（{total:.0f}ms）",
+        f"  解析 {dns:.0f}ms · 连接 {conn:.0f}ms · 对端 {ip}",
+        "  " + _curl_verdict(code),
+    ]
+
+
+def _curl_verdict(code: str) -> str:
+    """按状态码给一句「这算通还是不算」。HTTP 层能回包就说明网络通。"""
+    try:
+        n = int(code)
+    except (TypeError, ValueError):
+        return "网络通"
+    if n < 300:
+        return "网络通，接口正常"
+    if n < 400:
+        return "网络通，只是被重定向"
+    if n == 404:
+        return "网络通，是路径不对（服务有这个域名，没这个接口）"
+    if n in (401, 403):
+        return "网络通，只是要鉴权（没带 key 属正常）"
+    if n == 429:
+        return "网络通，只是被限流了"
+    if n < 500:
+        return f"网络通，接口拒绝了请求（HTTP {n}）"
+    return f"网络通，但服务端出错（HTTP {n}）"
+
+
+def _format_ping(r: dict, ep: netcheck.Endpoint) -> list[str]:
+    """把 ICMP/TCP 探测结果整理成群里能看懂的行。"""
+    if not r.get("ok"):
+        if r.get("method") == "dns":
+            return [f"  ❌ {r.get('error', '域名解析失败')}"]
+        return [f"  ❌ {r.get('error', '不通')}"]
+
+    out: list[str] = []
+    ip = r.get("target_ip", ep.host)
+    out.append(f"  对端 {ip}")
+    if r.get("method") == "icmp":
+        out.append(f"  ✅ ICMP 通，RTT {r.get('rtt_ms', 0):.0f}ms")
+    else:
+        note = r.get("note")
+        out.append(f"  ✅ TCP {r.get('port')} 通，连接 {r.get('rtt_ms', 0):.0f}ms")
+        if note:
+            out.append(f"  （{note}）")
+    return out
 
 
 # ---------------------------------------------------------------- /echo
