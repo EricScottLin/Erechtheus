@@ -2,7 +2,8 @@
 
 提供四类基础命令，用于验证消息链路是否打通、以及日常排查：
 
-- ``/ping``    探活，测量消息链路与接口往返延迟（拥堵情况）
+- ``/ping``    探活，测量消息链路与接口往返延迟（拥堵情况）；
+                ``/ping <域名>`` 则直接测那个域名通不通
 - ``/echo``    原样回显，验证「收到 -> 处理 -> 发出」全链路
 - ``/指令``    文本帮助菜单：**按指令列出所有用法**，``/指令 <指令名>`` 看单条详情
                 （``/help``、``帮助``、``菜单`` 由 nonebot-plugin-picmenu-next 提供图片菜单）
@@ -32,6 +33,7 @@ __plugin_meta__ = PluginMetadata(
 /指令 <指令名>    看某条指令的详细用法，如 /指令 签到
 /help            图片版完整菜单
 /ping            看看我还在不在、回应快不快
+/ping <域名>     测这个域名通不通，如 /ping api.mistral.ai
 /status          运行状态：收发消息数、已连续运行多久
 /连通            检查到外部服务的连通性（模型 / 曲库 / B站）
                 （别名：/curl /网络检查 /连通性 /netcheck）
@@ -76,9 +78,20 @@ def _congestion(ms: float) -> str:
 
 
 @ping.handle()
-async def handle_ping(bot: Bot, event: MessageEvent) -> None:
-    """探活：测量接口往返与消息链路延迟。"""
+async def handle_ping(
+    bot: Bot, event: MessageEvent, arg: Message = CommandArg()
+) -> None:
+    """探活。
+
+    不带参数：测消息链路与接口往返延迟（原来的「我还活着」）。
+    带参数（``/ping api.mistral.ai``）：按 ``/curl`` 的口径去测那个地址是否连得通
+    —— 2026-11-21 用户就是这么用的，而旧版会无视参数照回「pong」，看着像没听懂。
+    """
     prefix = _reply_prefix(event)
+    target = arg.extract_plain_text().strip()
+    if target:
+        await _ping_target(event, target, prefix)
+        return
 
     # 接口往返：NoneBot -> LLBot -> NoneBot
     t0 = time.perf_counter()
@@ -106,6 +119,23 @@ async def handle_ping(bot: Bot, event: MessageEvent) -> None:
         lines.append(f"  我回你一句：{api_ms:.0f}ms")
     worst = max(x for x in (link_ms, api_ms) if x is not None)
     lines.append(f"  {_congestion(worst)}")
+    await ping.finish(prefix + "\n".join(lines))
+
+
+async def _ping_target(event: MessageEvent, target: str, prefix: Message) -> None:
+    """``/ping <域名或地址>``：测这个目标是不是连得通（和 /curl 同一口径）。"""
+    targets, error = connectivity.resolve_targets(target, raw_host=True)
+    if error:
+        await ping.finish(prefix + error)
+
+    lines = ["🏓 ping " + target]
+    for t in targets:
+        ok, detail = await connectivity.probe(t.url)
+        lines.append(f"  {'✅' if ok else '❌'} {detail}")
+    if len(targets) > 1:
+        bad = sum(1 for line in lines[1:] if "❌" in line)
+        lines.append(f"  ────── {len(targets) - bad}/{len(targets)} 通")
+    lines.append("  （想看更细的连通性检查用 /curl）")
     await ping.finish(prefix + "\n".join(lines))
 
 

@@ -234,11 +234,35 @@ class TestProbe(unittest.TestCase):
         ok, _ = self.run_probe("https://forbidden.example")
         self.assertTrue(ok)
 
-    def test_404_is_failure(self):
+    def test_404_is_reachable(self):
+        """404 说明 DNS/TCP/TLS/HTTP 全通，只是路径不对 —— 网络层面要判「通」。
+
+        2026-11-21 踩到：/curl api.mistral.ai 命中根路径回 404，被误判成「不通」。
+        """
         _FakeAsyncClient.responses["https://missing.example"] = _FakeResponse(404)
         ok, detail = self.run_probe("https://missing.example")
-        self.assertFalse(ok)
+        self.assertTrue(ok)
         self.assertIn("404", detail)
+        self.assertIn("路径", detail)
+
+    def test_429_is_reachable(self):
+        _FakeAsyncClient.responses["https://limited.example"] = _FakeResponse(429)
+        ok, detail = self.run_probe("https://limited.example")
+        self.assertTrue(ok)
+        self.assertIn("限流", detail)
+
+    def test_5xx_is_failure(self):
+        """5xx 是服务端自己坏了，网络是通的，但对外仍报不通（保持保守）。"""
+        _FakeAsyncClient.responses["https://broken.example"] = _FakeResponse(502)
+        ok, detail = self.run_probe("https://broken.example")
+        self.assertFalse(ok)
+        self.assertIn("502", detail)
+
+    def test_mistral_root_404_counts_as_reachable(self):
+        """回归：/curl api.mistral.ai 的真实返回就是根路径 404。"""
+        _FakeAsyncClient.responses["https://api.mistral.ai"] = _FakeResponse(404)
+        ok, _ = self.run_probe("https://api.mistral.ai")
+        self.assertTrue(ok)
 
     def test_redirect_reported_not_followed(self):
         _FakeAsyncClient.responses["https://redir.example"] = _FakeResponse(

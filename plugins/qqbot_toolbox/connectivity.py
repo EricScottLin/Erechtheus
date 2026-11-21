@@ -149,8 +149,36 @@ def resolve_targets(query: str, *, raw_host: bool = False) -> tuple[list[Target]
     )
 
 
+# 这些状态码都意味着「DNS 解析 + TCP 握手 + TLS 握手 + HTTP 一来一回」全部成功，
+# 也就是网络层是通的，只是这个路径/方法本身不被接受或需要鉴权。
+# 2026-11-21 踩到：/curl api.mistral.ai 命中 https://api.mistral.ai/ 根路径，真的回 404，
+# 被判定为「❌ 不通」——可网络明明是通的（同域名 /v1/models 回 401）。
+_REACHABLE_CODES = frozenset({401, 403, 404, 405, 406, 409, 410, 415, 422, 426, 429, 451})
+
+
+def _is_reachable(code: int) -> bool:
+    """服务端给出了 HTTP 响应，就说明网络可达。"""
+    return code < 400 or code in _REACHABLE_CODES
+
+
+def _reach_hint(code: int) -> str:
+    """给「网络通但路径/鉴权不对」的状态码补一句人话。"""
+    if code == 404:
+        return "网络通，是路径不对（试试 /v1/models 这类真实接口）"
+    if code in (401, 403):
+        return "网络通，只是要鉴权（没带 key 属正常）"
+    if code == 429:
+        return "网络通，只是被限流了"
+    return "网络通，是这个接口不收这个请求"
+
+
 async def probe(url: str) -> tuple[bool, str]:
-    """探一个地址；返回 ``(是否通, 给人看的结果)``。"""
+    """探一个地址；返回 ``(是否通, 给人看的结果)``。
+
+    ``是否通`` 判的是**网络可达**，不是「这路径返回 200」：服务器只要回了
+    HTTP 响应（哪怕 404），就说明 DNS/TCP/TLS/HTTP 全链路没被墙，
+    这时判「通」并注明路径/鉴权问题；只有超时、连接失败才算「不通」。
+    """
     timeout = _cfg().qqbot_toolbox_conn_timeout
     started = time.perf_counter()
     try:
@@ -175,8 +203,11 @@ async def probe(url: str) -> tuple[bool, str]:
     # 3xx 不跟随：只报告"能连上但被重定向"
     if 300 <= code < 400:
         return True, f"HTTP {code} → {resp.headers.get('location', '?')[:40]}（{ms:.0f}ms）"
-    ok = code < 400 or code in (401, 403)  # 401/403 说明服务可达，只是要鉴权
-    return ok, f"HTTP {code}（{ms:.0f}ms）"
+    if code < 400:
+        return True, f"HTTP {code}（{ms:.0f}ms）"
+    if code in _REACHABLE_CODES:
+        return True, f"HTTP {code}（{ms:.0f}ms）—— {_reach_hint(code)}"
+    return False, f"HTTP {code}（{ms:.0f}ms）"
 
 
 # ---------------------------------------------------------------- 命令
