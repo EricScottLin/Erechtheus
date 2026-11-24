@@ -288,6 +288,11 @@ async def handle_features(bot: Bot, event: GroupMessageEvent) -> None:
 # 自然语言误触；参数认不出来时仍然响应，并在 _do_toggle 里提示可用功能，
 # 而不是静默无回复（用户会以为机器人坏了）。
 _TOGGLE_HEAD_RE = re.compile(r"^/?(?:开启|启用|关闭|禁用)\s*(\S.*)?$")
+# 带命令前缀时哪些算「要开关功能」。COMMAND_START 里还有 ""（裸命令），
+# 所以任何以「开启/关闭…」开头的消息都会进到 rule 里；只有以这几个词开头的
+# 才算开关请求，其余（``/功能列表``、``/开启essence``）按特征判断照常处理，
+# 否则 ``/功能列表`` 会被这里拦下、回一句「没找到功能」。
+_TOGGLE_WORDS = ("开启", "启用", "关闭", "禁用")
 
 
 async def _toggle_rule(event: MessageEvent, arg: Message = CommandArg()) -> bool:
@@ -295,8 +300,8 @@ async def _toggle_rule(event: MessageEvent, arg: Message = CommandArg()) -> bool
 
     三种情况：
 
-    1. 带命令前缀（``/开启 xxx``）——**一律响应**，参数写错也由 _do_toggle
-       给出「没找到功能 / 可用功能列表」的提示，不能静默无回复；
+    1. 带命令前缀且以开关词开头（``/开启 xxx``）——**一律响应**，参数写错也由
+       _do_toggle 给出「没找到功能 / 可用功能列表」的提示，不能静默无回复；
     2. 不带前缀但能匹配到已注册功能（``@机器人 关闭本群复读``）——响应，
        这是文档里写明的自然语言用法；
     3. 不带前缀且匹配不到功能（``关闭本群电脑``）——不响应，避免吃掉日常聊天。
@@ -306,8 +311,13 @@ async def _toggle_rule(event: MessageEvent, arg: Message = CommandArg()) -> bool
     """
     raw = event.get_message().extract_plain_text().strip()
     starts = get_driver().config.command_start or {"/"}
-    if any(p and raw.startswith(p) for p in starts):
-        return True
+    prefixed = any(p and raw.startswith(p) for p in starts)
+    if prefixed:
+        head = raw.lstrip("".join(p for p in starts if p)).strip()
+        if head.startswith(_TOGGLE_WORDS):
+            return True
+    # 不带前缀 / 前缀给了别的命令（如 /功能列表）：只有能匹配到功能才认，
+    # 避免把「关闭本群电脑」「/签到」这类日常消息吃成开关请求。
     return resolve_feature(arg.extract_plain_text()) is not None
 
 

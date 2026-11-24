@@ -493,6 +493,16 @@ async def e2e() -> None:
     check("/关闭 表情包", "已关闭" in reply_text(bot), reply_text(bot))
     check("表情包开关状态", feat.is_enabled(GROUP, "meme") is False)
 
+    # COMMAND_START 含 ""，任何消息都会进到 /开启 的 rule；命令式查列表不能被
+    # 开关 rule 抢走回一句「没找到功能」（2026-11-24 群里发 /功能列表 实际发生）
+    bot = new_bot("admin")
+    await run(bot, make_event("/功能列表", role="admin"))
+    check("命令式查列表不被开关 rule 拦截", "没找到功能" not in reply_text(bot), reply_text(bot))
+
+    bot = new_bot("admin")
+    await run(bot, make_event("/本群功能", role="admin"))
+    check("/本群功能 仍正常", "表情包" in reply_text(bot), reply_text(bot))
+
     # --- /盒 ---
     bot = new_bot("admin")
     await run(
