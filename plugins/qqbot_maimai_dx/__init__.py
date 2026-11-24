@@ -123,6 +123,19 @@ def _private_rule(name: str):
     return Rule(checker)
 
 
+def _anywhere_rule(name: str):
+    """私聊和指定群都响应；其余群静默。
+
+    「大象信息」用它：用户既可能在群里发，也可能照绑定时那句提示私聊发，
+    两边都要能用，否则会出现「明明发了却没反应」。
+    """
+
+    def checker(event: MessageEvent) -> bool:
+        return (_in_private(event) or _in_group(event)) and _plain(event) == name
+
+    return Rule(checker)
+
+
 def _unbind_rule():
     def checker(event: MessageEvent) -> bool:
         return _in_group(event) and _UNBIND_RE.match(_plain(event)) is not None
@@ -166,6 +179,8 @@ if not _IMPORT_ERROR:
         _START_ERROR = f"{type(exc).__name__}: {exc}"
         logger.error(f"舞萌直连初始化失败：{_START_ERROR}")
 
+
+# 凭证落盘/恢复的实现要在 _bindings_file 之后，所以放到文件末尾统一装配。
 def _bindings_file() -> Path:
     try:
         from nonebot_plugin_localstore import get_plugin_data_dir
@@ -201,6 +216,51 @@ def _save_bindings() -> None:
 
 # identity → 已绑定的游戏 userId。绑定表落盘，成绩缓存只在内存。
 _BOUND: dict = _load_bindings()
+
+
+def _credentials_file() -> Path:
+    return _bindings_file().with_name("credentials.json")
+
+
+def _save_credentials() -> None:
+    """把「身份 → userID/token」落盘，重启后不用重新扫码。
+
+    只存认证凭证，不含二维码、Cookie 或游戏会话；文件权限收紧到 0600。
+    """
+    bridge = _BRIDGE
+    if bridge is None:
+        return
+    path = _credentials_file()
+    try:
+        data = bridge.controller.export_bindings()
+        path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        try:
+            path.chmod(0o600)
+        except OSError:  # pragma: no cover - 某些文件系统不支持
+            pass
+    except Exception as exc:  # pragma: no cover - 磁盘异常
+        logger.warning(f"舞萌凭证写入失败：{type(exc).__name__}")
+
+
+def _restore_credentials() -> None:
+    """启动时把落盘的凭证灌回控制器；坏数据只跳过，不影响启动。"""
+    bridge = _BRIDGE
+    if bridge is None:
+        return
+    try:
+        data = json.loads(_credentials_file().read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return
+    except Exception as exc:  # pragma: no cover - 文件损坏
+        logger.warning(f"舞萌凭证读取失败：{type(exc).__name__}")
+        return
+    try:
+        count = bridge.controller.restore_bindings(data)
+    except Exception as exc:  # pragma: no cover - 数据异常
+        logger.warning(f"舞萌凭证恢复失败：{type(exc).__name__}")
+        return
+    if count:
+        logger.info(f"[qqbot_maimai_dx] 已恢复 {count} 个舞萌登录凭证，无需重新扫码")
 
 
 def _ready_text() -> str:
@@ -349,10 +409,11 @@ async def _help(event: MessageEvent):
     await help_matcher.finish("\n".join(lines))
 
 
-# ---------------------------------------------------------------- 大象信息（群内，免费）
+# ---------------------------------------------------------------- 大象信息（私聊+群内，免费）
 # 「大象」= 舞萌 DX 的 dx（dx 谐音大象），群里的叫法。
 # 一条指令同时给：游戏里的玩家资料（需已绑定）+ 机器人这边的状态（绑定/荣耀/月币/队列）。
-info_matcher = on_message(rule=_group_rule("大象信息"), priority=8, block=True)
+# 私聊与指定群都响应：绑定成功那句提示就是让用户「发大象信息」，私聊发也该有用。
+info_matcher = on_message(rule=_anywhere_rule("大象信息"), priority=8, block=True)
 
 
 @info_matcher.handle()
@@ -447,6 +508,7 @@ async def _do_bind(bot: Bot, event: MessageEvent, qr_text: str, matcher) -> None
     info = bridge.controller.binding(identity)
     _BOUND[identity] = int(info.get("user_id") or 0)
     _save_bindings()
+    _save_credentials()  # 同步落盘 token，重启后不用重新扫码
     charged, cost, after = await prices.charge(uid, "绑定") if known is None else (True, 0, 0)
     try:
         await bot.delete_msg(message_id=event.message_id)  # 尽力撤回二维码原消息
@@ -466,19 +528,22 @@ def _private_image_rule(event: MessageEvent) -> bool:
 
 
 # 私聊直接发二维码图片就自动绑定（priority 5 抢在 AI 插件前面，图片不进模型）。
+# 解不出二维码时**完全静默**：不认识的图不回、也不进 AI 模型，
+# 避免陌生人随便丢张图就能白嫖一次识别/解析。
 qr_image_matcher = on_message(rule=Rule(_private_image_rule), priority=5, block=True)
 
 
 @qr_image_matcher.handle()
 async def _qr_image(bot: Bot, event: MessageEvent):
+    # 组件不可用或解不出二维码都静默退出；用户主动发「绑定」才会看到提示。
     if not qr.AVAILABLE:
-        await qr_image_matcher.finish("二维码识别组件不可用：" + qr.unavailable_reason())
+        return
     data = await image.first_image_bytes(event, plugin_config.maimai_dx_qr_max_bytes)
-    qr_text = qr.decode(data) if data else ""
+    if not data:
+        return
+    qr_text = qr.decode(data)
     if not qr_text:
-        await qr_image_matcher.finish(
-            "这张图里没识别到二维码。要绑定的话，直接把舞萌小程序里的二维码原图发我。"
-        )
+        return
     await _do_bind(bot, event, qr_text, qr_image_matcher)
 
 
@@ -559,6 +624,7 @@ async def _unbind(bot: Bot, event: MessageEvent):
     reply = bridge.controller.handle(target_identity, "解绑")
     _BOUND.pop(target_identity, None)
     _save_bindings()
+    _save_credentials()
     if not reply.ok:
         await unbind_matcher.finish(reply.text)
     suffix = "" if target == uid else f"（解绑对象：{target}）"
@@ -582,3 +648,11 @@ def _register(name: str):
 
 for _name in _GROUP_TEXT:
     _register(_name)
+
+
+# ---------------------------------------------------------------- 凭证恢复（启动时）
+# 放在文件末尾：此时 _BRIDGE、_bindings_file、_restore_credentials 都已定义。
+# 没有这一步的话，每次 docker restart 都会让所有人重新扫码——绑定表还在，
+# 控制器却已经没有 token 了。
+if _BRIDGE is not None:
+    _restore_credentials()
