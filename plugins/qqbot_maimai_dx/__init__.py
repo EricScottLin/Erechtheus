@@ -70,7 +70,7 @@ except Exception as exc:  # pragma: no cover - 部署缺依赖时的兜底
     _IMPORT_ERROR = f"{type(exc).__name__}: {exc}"
 
 _READ_TIP = "正在获取玩家数据，通常约 1 分钟。"
-_NEED_BIND = "还没绑定舞萌账号。私聊发我一张舞萌二维码图片就能绑定。"
+_NEED_BIND = "还没绑定舞萌账号，私聊发送登录二维码完成绑定。"
 _FREE_WITHOUT_BIND = {"说明"}
 
 # 标准指令 → 别名列表。第一个元素是标准名，其余都是等价写法；
@@ -459,7 +459,7 @@ async def _info(bot: Bot, event: MessageEvent):
         f"查询中：{stats['active']} 个"
     )
     if not bound:
-        await info_matcher.finish("还没绑定舞萌账号。私聊发我一张舞萌二维码图片就能绑定。\n" + footer)
+        await info_matcher.finish("还没绑定舞萌账号，私聊发送登录二维码完成绑定。\n" + footer)
     cost, remain = await prices.quote(uid, "大象信息")
     if cost > remain:
         await info_matcher.finish(f"月币不够：这次要 {cost} 月币，现在只有 {remain}。")
@@ -527,7 +527,11 @@ async def _do_bind(bot: Bot, event: MessageEvent, qr_text: str, matcher) -> None
     if not reply.ok:
         if reply.kind == "account_mismatch":
             await matcher.finish("这个二维码是另一个舞萌号。一个 QQ 只能绑一个号，换号请先让管理员解绑。")
-        # 技术细节只进日志，聊天里只说"失败"，不披露机台/签名这类信息
+        # 二维码过期（一次性用完或超过有效期都算）单独给明确提示，
+        # 用户只需要重新获取一张码，不用猜是哪里出问题。
+        if reply.kind == "qr_expired":
+            await matcher.finish("二维码已过期，重新私聊发送登录二维码。")
+        # 其余技术细节只进日志，聊天里只说"失败"，不披露机台/签名这类信息
         logger.warning(f"舞萌绑定失败：{reply.text}")
         await matcher.finish("绑定没成功。重新生成一张二维码再发我；连续失败请联系管理员。")
     info = bridge.controller.binding(identity)
