@@ -45,7 +45,7 @@ __plugin_meta__ = PluginMetadata(
     usage="""\
 说明            看这份说明与当前模式（免费）
 大象信息        玩家资料 + 本地状态（免费）
-更新成绩        读取最新成绩（约 1 分钟）
+更新成绩        读取最新成绩（约 1 分钟），也可发 B50 / 更新b50
 导出            导出成绩 JSON 与 CSV
 登出            独立登出并核验远端状态
 绑定            私聊：发送「绑定」并附二维码图片""",
@@ -73,11 +73,13 @@ _READ_TIP = "正在获取玩家数据，通常约 1 分钟。"
 _NEED_BIND = "还没绑定舞萌账号。私聊发我一张舞萌二维码图片就能绑定。"
 _FREE_WITHOUT_BIND = {"说明"}
 
-# 指令名 → 传给 BotController 的指令（帮助/状态/解绑单独处理，不在此表）
-_GROUP_TEXT = {
-    "更新成绩": "更新成绩",
-    "导出": "导出成绩",
-    "登出": "登出",
+# 标准指令 → 别名列表。第一个元素是标准名，其余都是等价写法；
+# 别名收到后仍按标准指令执行、计费和回包，用户不需要记住哪一个才是"正式名字"。
+# （帮助/状态/解绑单独处理，不在此表）
+_GROUP_ALIASES = {
+    "更新成绩": ("更新成绩", "更新b50", "更新B50", "B50", "b50"),
+    "导出": ("导出", "导出成绩"),
+    "登出": ("登出",),
 }
 
 # 「解绑」允许带 @某人 或直接跟 QQ 号；@ 在纯文本里不占字符，所以两种写法都能覆盖。
@@ -659,17 +661,24 @@ _read_announce = _READ_TIP if plugin_config.maimai_dx_mode == "real" else None
 
 
 def _register(name: str):
-    matcher = on_message(rule=_group_rule(name), priority=8, block=True)
+    """按标准指令注册，同时让它的所有别名都能触发。"""
+    aliases = _GROUP_ALIASES[name]
+
+    def checker(event: MessageEvent) -> bool:
+        return _in_group(event) and _plain(event) in aliases
+
+    matcher = on_message(rule=Rule(checker), priority=8, block=True)
     announce = _read_announce if name in ("更新成绩", "登出") else None
 
     @matcher.handle()
     async def _handler(bot: Bot, event: MessageEvent):
-        await _run_group(matcher, bot, event, name, _GROUP_TEXT[name], announce)
+        # 统一用标准名往下走：扣费、日志、回包都只认一个名字。
+        await _run_group(matcher, bot, event, name, name, announce)
 
     return matcher
 
 
-for _name in _GROUP_TEXT:
+for _name in _GROUP_ALIASES:
     _register(_name)
 
 
