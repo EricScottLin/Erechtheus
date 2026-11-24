@@ -69,8 +69,8 @@ try:
 except Exception as exc:  # pragma: no cover - 部署缺依赖时的兜底
     _IMPORT_ERROR = f"{type(exc).__name__}: {exc}"
 
-_READ_TIP = "已收到，正在登录、读取并核验登出，通常约 1 分钟；读完在这里发结果。"
-_NEED_BIND = "还没绑定舞萌账号。私聊我直接发一张舞萌二维码图片就能绑定。"
+_READ_TIP = "正在获取玩家数据，通常约 1 分钟。"
+_NEED_BIND = "还没绑定舞萌账号。私聊发我一张舞萌二维码图片就能绑定。"
 _FREE_WITHOUT_BIND = {"说明"}
 
 # 指令名 → 传给 BotController 的指令（帮助/状态/解绑单独处理，不在此表）
@@ -264,7 +264,11 @@ def _restore_credentials() -> None:
 
 
 def _ready_text() -> str:
+    """给日志用的失败原因；不外发给用户（技术细节只进日志）。"""
     return _IMPORT_ERROR or _START_ERROR or "未知原因"
+
+
+_USER_DOWN = "舞萌功能暂时不可用，请稍后再试。"
 
 
 def _chat_event(event: MessageEvent, text: str, *, private=None) -> ChatEvent:
@@ -285,6 +289,23 @@ def _identity(event: MessageEvent) -> str:
 
 def _is_bound(event: MessageEvent) -> bool:
     return _identity(event) in _BOUND
+
+
+def _has_credentials(event: MessageEvent) -> bool:
+    """绑定表有记录且控制器真的持有凭证。
+
+    绑定表落盘、凭证可能缺失（旧版本升级、文件被清），只查绑定表会让
+    「正在获取…」和「还没绑定」两条消息一起发出来。
+    """
+    if _identity(event) not in _BOUND:
+        return False
+    bridge = _BRIDGE
+    if bridge is None:
+        return False
+    try:
+        return bool(bridge.controller.binding(_identity(event)).get("bound"))
+    except Exception:  # pragma: no cover - 控制器不可用时按未绑定处理
+        return False
 
 
 def _export_dir() -> Path:
@@ -346,9 +367,11 @@ async def _run_group(matcher, bot: Bot, event: MessageEvent, name: str, text: st
     """群指令统一流程：绑定门槛 → 报价 → 执行 → 成功后扣费 → 交付。"""
     bridge = _BRIDGE
     if bridge is None:
-        await matcher.finish("舞萌直连还没就绪：" + _ready_text())
+        await matcher.finish(_USER_DOWN)
     uid = str(event.user_id)
-    if name not in _FREE_WITHOUT_BIND and not _is_bound(event):
+    if name not in _FREE_WITHOUT_BIND and not _has_credentials(event):
+        # 绑定表有记录但凭证已丢失（例如旧版本重启）时也走这里：
+        # 否则会先发「正在获取」再报「没绑定」，自相矛盾。
         await matcher.finish(_NEED_BIND)
     cost, balance = await prices.quote(uid, name)
     if cost > balance:
@@ -420,9 +443,9 @@ info_matcher = on_message(rule=_anywhere_rule("大象信息"), priority=8, block
 async def _info(bot: Bot, event: MessageEvent):
     bridge = _BRIDGE
     if bridge is None:
-        await info_matcher.finish("舞萌直连还没就绪：" + _ready_text())
+        await info_matcher.finish(_USER_DOWN)
     uid = str(event.user_id)
-    bound = _is_bound(event)
+    bound = _has_credentials(event)  # 以真实凭证为准，避免显示「已绑定」却查不到
     level = int(await prices.core.pricing.level_of(uid))
     balance = int(await prices.core.wallet.balance(uid, prices.CURRENCY))
     stats = bridge.stats()
@@ -434,7 +457,7 @@ async def _info(bot: Bot, event: MessageEvent):
         f"查询中：{stats['active']} 个"
     )
     if not bound:
-        await info_matcher.finish("还没绑定舞萌账号，下面是本地状态。\n私聊我发「绑定」并附上二维码图片即可绑定。\n" + footer)
+        await info_matcher.finish("还没绑定舞萌账号。私聊发我一张舞萌二维码图片就能绑定。\n" + footer)
     cost, remain = await prices.quote(uid, "大象信息")
     if cost > remain:
         await info_matcher.finish(f"月币不够：这次要 {cost} 月币，现在只有 {remain}。")
@@ -477,7 +500,7 @@ async def _do_bind(bot: Bot, event: MessageEvent, qr_text: str, matcher) -> None
     """绑定流程：文字命令与「私聊直接发图」共用。"""
     bridge = _BRIDGE
     if bridge is None:
-        await matcher.finish("舞萌直连还没就绪：" + _ready_text())
+        await matcher.finish(_USER_DOWN)
     uid = str(event.user_id)
     identity = _identity(event)
     known = _BOUND.get(identity)
@@ -607,7 +630,7 @@ def _mentioned(event: MessageEvent) -> str:
 async def _unbind(bot: Bot, event: MessageEvent):
     bridge = _BRIDGE
     if bridge is None:
-        await unbind_matcher.finish("舞萌直连还没就绪：" + _ready_text())
+        await unbind_matcher.finish(_USER_DOWN)
     uid = str(event.user_id)
     is_superuser = uid in {str(item) for item in get_driver().config.superusers}
     target = _mentioned(event) or uid
