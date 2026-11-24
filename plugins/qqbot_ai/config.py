@@ -172,6 +172,13 @@ class Config(BaseModel):
         default=2500, ge=200, le=20000,
         description="单次工具结果喂回模型的字数上限",
     )
+    qqbot_ai_currency_enabled: bool = Field(
+        default=True,
+        description="是否启用汇率换算工具（convert_currency，自然语言「多少日元是多少人民币」）",
+    )
+    qqbot_ai_currency_timeout_seconds: float = Field(
+        default=8.0, ge=2.0, le=30.0, description="汇率接口超时（秒）"
+    )
 
     # ---- 唤醒与权限 ----
     qqbot_ai_wake_words: list[str] = Field(

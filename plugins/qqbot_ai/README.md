@@ -154,12 +154,20 @@ qqbot_ai_vision_model=step-5-preview
 | `qqbot_ai_search_timeout_seconds` | `15` | 搜索超时 |
 | `qqbot_ai_tools_max_rounds` | `2` | 最多连续调工具轮数，超了就要求模型直接作答 |
 | `qqbot_ai_tool_result_max_chars` | `2500` | 单次工具结果喂回模型的字数上限 |
+| `qqbot_ai_currency_enabled` | `true` | 是否启用汇率换算工具 |
+| `qqbot_ai_currency_timeout_seconds` | `8` | 汇率接口超时 |
 
 现有工具：
 
 - `web_search`：ddgs 联网搜索，返回标题 + 摘要 + 链接；搜不到会去掉「是什么」
   这类口头语重搜一次
 - `get_current_time`：当前北京时间（日期/时间/星期）
+- `convert_currency`：实时汇率换算，直接问「2500日元是多少人民币」就行。
+  数据源依次为 **中国货币网人民币中间价**（权威，覆盖人民币对 20 多种货币）→
+  **open.er-api.com**（全币种实时价）→ **frankfurter.app**（欧洲央行参考价）兜底；
+  参数是 `amount` / `from` / `to`，也可把原话塞进 `query` 让工具自己解析。
+  解析支持中文数字（`两千五百日元`）、`3.5万`、`$50` 等写法，
+  只给一个币种时默认换成人民币
 
 模型没调工具也能回答的问题就直接答；工具报错时是把错误文字交给模型自己兜底，
 不会抛给用户。

@@ -47,7 +47,11 @@ class Agent:
                 config.qqbot_ai_search_max_results,
                 config.qqbot_ai_search_timeout_seconds,
             )
-            self._tools = build_tools(search_fn, config.qqbot_ai_search_max_results)
+            self._tools = build_tools(
+                search_fn,
+                config.qqbot_ai_search_max_results,
+                currency_enabled=config.qqbot_ai_currency_enabled,
+            )
 
     @property
     def tools(self) -> list[Tool]:

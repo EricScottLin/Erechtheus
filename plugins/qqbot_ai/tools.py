@@ -50,12 +50,17 @@ async def run_get_time(args: dict[str, Any]) -> str:
     return f"当前北京时间：{now:%Y-%m-%d %H:%M:%S}，星期{weekdays[now.weekday()]}"
 
 
-def build_tools(search_fn: Optional[ToolHandler], max_results: int) -> list[Tool]:
+def build_tools(
+    search_fn: Optional[ToolHandler],
+    max_results: int,
+    currency_enabled: bool = True,
+) -> list[Tool]:
     """组装当前可用的工具列表。
 
     Args:
         search_fn: 联网搜索实现；``None`` 表示搜索后端不可用（不暴露该工具）
         max_results: 一次搜索最多返回几条
+        currency_enabled: 是否暴露汇率换算工具
     """
     tools = [
         Tool(
@@ -65,6 +70,34 @@ def build_tools(search_fn: Optional[ToolHandler], max_results: int) -> list[Tool
             handler=run_get_time,
         )
     ]
+    if currency_enabled:
+        from .tools_currency import run_currency_convert
+
+        tools.append(
+            Tool(
+                name="convert_currency",
+                description=(
+                    "查询实时汇率并换算货币。用户问「X 日元是多少人民币」「100 美元换多少日元」"
+                    "「两千五美元是多少港币」这类问题时必须调用本工具，不要凭记忆或搜索猜汇率。"
+                    "src/dst 是 3 位币种代码（CNY 人民币、JPY 日元、USD 美元、EUR 欧元、"
+                    "GBP 英镑、HKD 港币、KRW 韩元等）；拿不准代码时把原话整句放进 query 让工具自己解析。"
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "amount": {"type": "number", "description": "要换算的金额，如 2500"},
+                        "from": {"type": "string", "description": "源币种代码，如 JPY"},
+                        "to": {"type": "string", "description": "目标币种代码，如 CNY"},
+                        "query": {
+                            "type": "string",
+                            "description": "可选，用户原话（如「2500日元是多少人民币」），用于兜底解析",
+                        },
+                    },
+                    "required": ["amount", "from", "to"],
+                },
+                handler=run_currency_convert,
+            )
+        )
     if search_fn is not None:
         tools.append(
             Tool(
