@@ -3,12 +3,21 @@
 可见范围（三层，任何一层不满足都不出声）：
 
   1. 群：只有 MAIMAI_DX_GROUP_IDS 里的群可用；其他群 matcher 不匹配，完全静默。
-  2. 私聊：只有「绑定」可用；其余指令在私聊里静默（不回「去某群用」，避免暴露群）。
+  2. 私聊：只有 /绑定、/大象信息 可用；其余指令在私聊里静默（不回「去某群用」，避免暴露群）。
   3. 绑定：除「说明 / 我的状态」外都要求先绑定；未绑定统一提示去私聊绑定。
 
-指令名刻意用短词（说明 / 更新 / 上传 / 导出 / 登出 / 绑定 / 解绑 …），但匹配是
-**整条消息精确匹配**（允许一个前导 /），所以「更新 了什么」「绑定 手机号」这类
-日常闲聊不会误触发；这也避开了 /帮助、/状态、/资料 与其他插件的重名。
+指令统一带 ``/`` 前缀（``/大象信息``、``/更新成绩``、``/B50`` …），匹配仍是
+**整条消息精确匹配**。2026-11-25 起有三条原因：
+
+1. 不带前缀时 /命令冲突：线上 COMMAND_START 含空串，裸「功能列表」这类消息会被
+   别的插件的 command matcher 当成参数吃掉（群里实际回成了「没找到功能」）；
+2. 群里裸发「大象信息」「更新成绩」和日常聊天分不清，用户也会以为小e 该懂；
+3. 解开了一处竞态：小e 的唤醒规则只看消息不以命令前缀开头才接话，而它在
+   priority 8，本插件原来也在 8，谁先注册谁说了算、重启后可能互换；带 / 之后
+   小e 直接不接，命令永远归本插件。
+
+因为按命令规则匹配，真正的 /绑定 /大象信息 会被写进帮助和纠错命令表（``/大象``
+拼错能提示），各指令在这里也登记进 qqbot_help（见文件末尾）。
 
 收费见 prices.py：月币结算，先查余额、成功后扣费、失败不收费。
 绑定门槛：荣耀 Lv.10（累计 900 荣耀；Lv.9 是觉醒点，必须先 /升阶）。
@@ -23,7 +32,7 @@ import re
 import time
 from pathlib import Path
 
-from nonebot import get_driver, get_plugin_config, on_message
+from nonebot import get_driver, get_plugin, get_plugin_config, on_message
 from nonebot.adapters.onebot.v11 import (
     Bot,
     GroupMessageEvent,
@@ -43,12 +52,13 @@ __plugin_meta__ = PluginMetadata(
     name="舞萌DX直连",
     description="直连舞萌官方服：资料/成绩读取、查分器同步预览、导出与登出",
     usage="""\
-说明            看这份说明与当前模式（免费）
-大象信息        玩家资料 + 本地状态（免费）
-更新成绩        读取最新成绩（约 1 分钟），也可发 B50 / 更新b50
-导出            导出成绩 JSON 与 CSV
-登出            独立登出并核验远端状态
-绑定            私聊：发送「绑定」并附二维码图片""",
+/说明          看这份说明与当前模式（免费）
+/帮助          全部命令总览
+/大象信息      玩家资料 + 本地状态（免费）
+/更新成绩      读取最新成绩（约 1 分钟），也可发 /B50
+/导出          导出成绩 JSON 与 CSV
+/登出          独立登出并核验远端状态
+/绑定          私聊：发送「/绑定」并附二维码图片""",
     # type=library 是刻意的：帮助菜单与 /指令 都只按这个字段隐藏插件。
     # 本插件只在指定群对已绑定用户开放，不该出现在公共菜单里。
     type="library",
@@ -83,7 +93,7 @@ _GROUP_ALIASES = {
 }
 
 # 「解绑」允许带 @某人 或直接跟 QQ 号；@ 在纯文本里不占字符，所以两种写法都能覆盖。
-_UNBIND_RE = re.compile(r"^[/／]?\s*解绑(?:\s+\d{5,12})?\s*$")
+_UNBIND_RE = re.compile(r"^解绑(?:\s+\d{5,12})?\s*$")
 
 
 def _group_ids() -> frozenset[int]:
@@ -100,7 +110,7 @@ def _in_private(event: MessageEvent) -> bool:
 
 
 def _plain(event: MessageEvent) -> str:
-    """消息纯文本（去掉前导 /），用来做「整条消息精确匹配」。
+    """消息纯文本（保留前导 /），用来做「整条消息精确匹配」。
 
     注意：OneBot v11 的 MessageEvent 没有 get_plain_text()，必须走 get_message()。
     """
@@ -108,19 +118,45 @@ def _plain(event: MessageEvent) -> str:
         text = event.get_message().extract_plain_text()
     except Exception:  # pragma: no cover - 事件结构异常
         return ""
-    return text.strip().lstrip("/／").strip()
+    return text.strip()
 
 
-def _group_rule(name: str):
+def _command_prefix() -> list[str]:
+    """配置了的命令前缀，长的在前（``/`` 先于空串）。"""
+    try:
+        starts = set(get_driver().config.command_start)
+    except Exception:  # noqa: BLE001
+        starts = {"/"}
+    return sorted((s for s in starts if s), key=len, reverse=True)
+
+
+def _split_command(event: MessageEvent) -> tuple[str, str]:
+    """``"/大象信息"`` → ``("/", "大象信息")``；不以任何前缀开头返回 ``("", 文本)``。"""
+    text = _plain(event)
+    for prefix in _command_prefix():
+        if text.startswith(prefix):
+            return prefix, text[len(prefix):].strip()
+    return "", text
+
+
+def _is_command(event: MessageEvent, names) -> bool:
+    prefix, body = _split_command(event)
+    return bool(prefix) and body in names
+
+
+def _group_rule(names):
+    """群内 + 指定群 + 带命令前缀 + 去前缀后整条等于某个名字。"""
+    names = (names,) if isinstance(names, str) else tuple(names)
+
     def checker(event: MessageEvent) -> bool:
-        return _in_group(event) and _plain(event) == name
+        return _in_group(event) and _is_command(event, names)
 
     return Rule(checker)
 
 
 def _private_rule(name: str):
     def checker(event: MessageEvent) -> bool:
-        return _in_private(event) and _plain(event) == name
+        return _in_private(event) and _is_command(event, (name,))
 
     return Rule(checker)
 
@@ -128,19 +164,20 @@ def _private_rule(name: str):
 def _anywhere_rule(name: str):
     """私聊和指定群都响应；其余群静默。
 
-    「大象信息」用它：用户既可能在群里发，也可能照绑定时那句提示私聊发，
-    两边都要能用，否则会出现「明明发了却没反应」。
+    「大象信息」用它：群里的绑定提示是「私聊 /大象信息」，而群里实际使用时
+    又是另一种节奏，两边都要能用，否则会出现「明明发了却没反应」。
     """
 
     def checker(event: MessageEvent) -> bool:
-        return (_in_private(event) or _in_group(event)) and _plain(event) == name
+        return (_in_private(event) or _in_group(event)) and _is_command(event, (name,))
 
     return Rule(checker)
 
 
 def _unbind_rule():
     def checker(event: MessageEvent) -> bool:
-        return _in_group(event) and _UNBIND_RE.match(_plain(event)) is not None
+        prefix, body = _split_command(event)
+        return _in_group(event) and bool(prefix) and _UNBIND_RE.match(body) is not None
 
     return Rule(checker)
 
@@ -414,11 +451,11 @@ help_matcher = on_message(rule=_group_rule("说明"), priority=8, block=True)
 async def _help(event: MessageEvent):
     mode = "演示模式（不请求游戏服）" if plugin_config.maimai_dx_mode == "demo" else "真实模式"
     rows = [
-        ("大象信息", "免费", "玩家资料 + 本地状态（绑定/荣耀/月币/队列）"),
-        ("更新成绩", None, "读最新成绩（约 1 分钟）"),
-        ("导出", None, "导出成绩 JSON 与 CSV"),
-        ("登出", "免费", "独立登出并核验远端状态"),
-        ("识图", "免费", "识别成绩结算图（曲名/难度/达成率/判定）并存本地档案"),
+        ("/大象信息", "免费", "玩家资料 + 本地状态（绑定/荣耀/月币/队列）；私聊也可用"),
+        ("/更新成绩", None, "读最新成绩（约 1 分钟），同义：/B50"),
+        ("/导出", None, "导出成绩 JSON 与 CSV"),
+        ("/登出", "免费", "独立登出并核验远端状态"),
+        ("/识图", "免费", "识别成绩结算图（曲名/难度/达成率/判定）并存本地档案"),
     ]
     lines = [f"🔧 舞萌直连 · {mode}", "────────────"]
     for name, tag, note in rows:
@@ -427,8 +464,9 @@ async def _help(event: MessageEvent):
         lines.append(f"{name} · {tag} · {note}")
     lines += [
         "────────────",
-        f"绑定：私聊直接发二维码图片（自动识别）；需要荣耀 Lv.{plugin_config.maimai_dx_bind_min_level}",
-        "解绑：管理员发「解绑 @你」；满级可自助",
+        f"绑定：私聊发 /绑定 并附二维码图片（自动识别）；需要荣耀 Lv.{plugin_config.maimai_dx_bind_min_level}",
+        "解绑：管理员发「/解绑 @你」；满级可自助",
+        "注意：全部命令都要带 /；不带 / 的「大象信息」会被小e 当成聊天。",
         "月币按荣耀等级打折；失败不扣费。",
     ]
     await help_matcher.finish("\n".join(lines))
@@ -437,7 +475,7 @@ async def _help(event: MessageEvent):
 # ---------------------------------------------------------------- 大象信息（私聊+群内，免费）
 # 「大象」= 舞萌 DX 的 dx（dx 谐音大象），群里的叫法。
 # 一条指令同时给：游戏里的玩家资料（需已绑定）+ 机器人这边的状态（绑定/荣耀/月币/队列）。
-# 私聊与指定群都响应：绑定成功那句提示就是让用户「发大象信息」，私聊发也该有用。
+# 私聊与指定群都响应：绑定成功那句提示就是让用户「发 /大象信息」，私聊发也该有用。
 info_matcher = on_message(rule=_anywhere_rule("大象信息"), priority=8, block=True)
 
 
@@ -526,11 +564,11 @@ async def _do_bind(bot: Bot, event: MessageEvent, qr_text: str, matcher) -> None
         return
     if not reply.ok:
         if reply.kind == "account_mismatch":
-            await matcher.finish("这个二维码是另一个舞萌号。一个 QQ 只能绑一个号，换号请先让管理员解绑。")
+            await matcher.finish("这个二维码是另一个舞萌号。一个 QQ 只能绑一个号，换号请先让管理员 /解绑。")
         # 二维码过期（一次性用完或超过有效期都算）单独给明确提示，
         # 用户只需要重新获取一张码，不用猜是哪里出问题。
         if reply.kind == "qr_expired":
-            await matcher.finish("二维码已过期，重新私聊发送登录二维码。")
+            await matcher.finish("二维码已过期，重新私聊发一张二维码（直接发图即可，或发 /绑定 带图）。")
         # 其余技术细节只进日志，聊天里只说"失败"，不披露机台/签名这类信息
         logger.warning(f"舞萌绑定失败：{reply.text}")
         await matcher.finish("绑定没成功。重新生成一张二维码再发我；连续失败请联系管理员。")
@@ -548,8 +586,13 @@ async def _do_bind(bot: Bot, event: MessageEvent, qr_text: str, matcher) -> None
     # 渲染成 <br/>；这里统一用自己的说法。
     tail = f" {extra}" if extra else ""
     if known is None:
-        await matcher.finish(f"账号绑定成功，现在可以发「大象信息」看资料，或「更新成绩」读成绩。{tail}")
-    await matcher.finish("已重新登录（还是这个号）。" + tail)
+        # 提示必须写明带 / 的写法：不带 / 的「大象信息」会被小e 当成聊天接走，
+        # 用户照着发就收不到资料（2026-11-25 实际发生）。
+        await matcher.finish(
+            "账号绑定成功，现在可以发 /大象信息 看资料，或 /更新成绩 读成绩"
+            "（注意前面要带 /，不带 / 会被当成聊天）。" + tail
+        )
+    await matcher.finish("已重新登录（还是这个号）。资料发 /大象信息，成绩发 /更新成绩。" + tail)
 
 
 def _private_image_rule(event: MessageEvent) -> bool:
@@ -564,7 +607,7 @@ qr_image_matcher = on_message(rule=Rule(_private_image_rule), priority=5, block=
 
 @qr_image_matcher.handle()
 async def _qr_image(bot: Bot, event: MessageEvent):
-    # 组件不可用或解不出二维码都静默退出；用户主动发「绑定」才会看到提示。
+    # 组件不可用或解不出二维码都静默退出；用户主动发「/绑定」才会看到提示。
     if not qr.AVAILABLE:
         return
     data = await image.first_image_bytes(event, plugin_config.maimai_dx_qr_max_bytes)
@@ -578,14 +621,16 @@ async def _qr_image(bot: Bot, event: MessageEvent):
 
 @bind_matcher.handle()
 async def _bind(bot: Bot, event: MessageEvent):
-    """「绑定」文字命令：保留给"先发文字再补图"的情况；带图的会被上面的自动识别接走。"""
+    """「/绑定」文字命令：保留给"先发文字再补图"的情况；带图的会被上面的自动识别接走。"""
     data = await image.first_image_bytes(event, plugin_config.maimai_dx_qr_max_bytes)
     if data and qr.AVAILABLE:
         qr_text = qr.decode(data) or ""
         if qr_text:
             await _do_bind(bot, event, qr_text, bind_matcher)
             return
-    await bind_matcher.finish("直接私聊发一张舞萌二维码图片就行，我会自动识别并绑定。")
+    await bind_matcher.finish(
+        "直接私聊发一张舞萌二维码图片就行，我会自动识别并绑定；也可以发 /绑定 并附上图。"
+    )
 
 
 # ---------------------------------------------------------------- 识图（群内，免费）
@@ -599,7 +644,7 @@ async def _score(bot: Bot, event: MessageEvent):
         await score_matcher.finish("成绩图识别组件不可用：" + scorecard.unavailable_reason())
     data = await image.first_image_bytes(event, plugin_config.maimai_dx_qr_max_bytes)
     if not data:
-        await score_matcher.finish("把成绩结算图和「识图」发在同一条消息里（原图，别截屏压缩）。")
+        await score_matcher.finish("把成绩结算图和「/识图」发在同一条消息里（原图，别截屏压缩）。")
     try:
         items = await asyncio.to_thread(scorecard.ocr, data)
     except Exception:
@@ -641,7 +686,7 @@ async def _unbind(bot: Bot, event: MessageEvent):
     is_superuser = uid in {str(item) for item in get_driver().config.superusers}
     target = _mentioned(event) or uid
     if target != uid and not is_superuser:
-        await unbind_matcher.finish("解绑只能由管理员协助（解绑 @某人）。")
+        await unbind_matcher.finish("解绑只能由管理员协助（/解绑 @某人）。")
     if target == uid and not is_superuser:
         level = await _level_of(uid)
         if level < plugin_config.maimai_dx_self_unbind_level:
@@ -657,7 +702,8 @@ async def _unbind(bot: Bot, event: MessageEvent):
     if not reply.ok:
         await unbind_matcher.finish(reply.text)
     suffix = "" if target == uid else f"（解绑对象：{target}）"
-    await unbind_matcher.finish("已解绑，绑定与成绩缓存已清空。" + suffix)
+    tip = "" if target == uid else f"提醒 TA 重新私聊发二维码绑定后，发 /大象信息 看资料。"
+    await unbind_matcher.finish("已解绑，绑定与成绩缓存已清空。" + suffix + (f"\n{tip}" if tip else ""))
 
 
 # ---------------------------------------------------------------- 其余指令（群内）
@@ -669,7 +715,7 @@ def _register(name: str):
     aliases = _GROUP_ALIASES[name]
 
     def checker(event: MessageEvent) -> bool:
-        return _in_group(event) and _plain(event) in aliases
+        return _in_group(event) and _is_command(event, aliases)
 
     matcher = on_message(rule=Rule(checker), priority=8, block=True)
     announce = _read_announce if name in ("更新成绩", "登出") else None
@@ -692,3 +738,42 @@ for _name in _GROUP_ALIASES:
 # 控制器却已经没有 token 了。
 if _BRIDGE is not None:
     _restore_credentials()
+
+
+# ---------------------------------------------------------------- 帮助登记
+# 插件 type=library，不进/菜单 的自动分组；但命令改成了带 / 的真命令之后，
+# 写进 qqbot_help 的说明表，/help 和「/大象」拼错的纠错提示才能用上。
+try:
+    hp = get_plugin("qqbot_help")
+    if hp is not None:
+        hp.module.describe(
+            "说明", desc="舞萌直连说明与收费（/说明）",
+            usage=["/说明"], group="舞萌",
+        )
+        hp.module.describe(
+            "大象信息", desc="玩家资料 + 本地状态（免费，群里/私聊都行）",
+            usage=["/大象信息"], group="舞萌",
+        )
+        hp.module.describe(
+            "更新成绩", "更新b50", "更新B50", "B50", "b50",
+            desc="读取最新成绩并出成绩图（约 1 分钟）",
+            usage=["/更新成绩"], group="舞萌",
+        )
+        hp.module.describe(
+            "导出", "导出成绩", desc="导出成绩 JSON 与 CSV", usage=["/导出"], group="舞萌",
+        )
+        hp.module.describe(
+            "登出", desc="独立登出并核验远端状态", usage=["/登出"], group="舞萌",
+        )
+        hp.module.describe(
+            "识图", desc="识别成绩结算图并存本地档案", usage=["/识图（和图发在同一条）"], group="舞萌",
+        )
+        hp.module.describe(
+            "绑定", desc="私聊绑定舞萌账号", usage=["私聊发 /绑定 并附二维码图"], group="舞萌",
+        )
+        hp.module.describe(
+            "解绑", desc="解绑舞萌账号（管理员协助；满级可自助）",
+            usage=["/解绑 @某人"], group="舞萌",
+        )
+except Exception as exc:  # noqa: BLE001 —— 帮助登记是锦上添花，不能拖垮插件
+    logger.warning(f"[qqbot_maimai_dx] 帮助登记失败：{type(exc).__name__}: {exc}")

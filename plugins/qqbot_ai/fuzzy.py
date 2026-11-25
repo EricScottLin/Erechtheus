@@ -123,10 +123,12 @@ def score_one(query: str, candidate: str) -> tuple[float, str]:
     reason = ""
 
     # 1. 前缀 / 包含（「签到」 vs 「签到啦」，「金句」 vs 「金句添加」）
+    #    只打了一半的缩写（「大象」->「大象信息」）是最常见的输入，权重给足，
+    #    否则会被别的命令靠编辑距离压下去。
     if c.startswith(q) or q.startswith(c):
         shorter = min(len(q), len(c))
         longer = max(len(q), len(c))
-        score += 40 + 20 * (shorter / longer)
+        score += (70 if shorter >= 2 else 40) + 20 * (shorter / longer)
         reason = "前缀相同"
     elif q in c or c in q:
         score += 25 + 15 * (min(len(q), len(c)) / max(len(q), len(c)))

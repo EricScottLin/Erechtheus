@@ -122,6 +122,12 @@ def _clean_text(event: MessageEvent) -> str:
     return text_utils.strip_command_prefix(text, _command_starts(event))
 
 
+def _starts_with_command_prefix(event: MessageEvent) -> bool:
+    """这条消息是不是以命令前缀（``/`` 等）开头。"""
+    text = event.get_message().extract_plain_text().strip()
+    return any(p and text.startswith(p) for p in _command_starts(event))
+
+
 # 本插件自己处理的命令：这些要交给下面的 matcher，不算「别人的命令」
 _OWN_COMMANDS = {"ai"}
 
@@ -429,6 +435,11 @@ async def _handle_typo(event: MessageEvent) -> None:
 # ---------------------------------------------------------------- 唤醒词
 async def _wake_rule(event: MessageEvent) -> bool:
     if _WAKE_RE is None or not _enabled(event):
+        return False
+    # 「/小e 问题」这类是命令写法不是唤醒词。而且 COMMAND_START 含空串时，
+    # 带 / 的消息会先被别的插件的命令规则接走，小e 再去接就等于抢答
+    # （2026-11-25 群里发 /大象信息，同一刻还有一条聊天被当成绩回答了）。
+    if _starts_with_command_prefix(event):
         return False
     # 「@别人 小e 帮我看看」是在跟别人说话：除非同时 @ 了 bot，否则不接话
     if _at_others(event) and not (hasattr(event, "is_tome") and event.is_tome()):

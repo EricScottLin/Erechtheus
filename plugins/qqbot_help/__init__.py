@@ -41,6 +41,8 @@ def describe(
 ) -> None:
     """登记命令说明。多个别名可以一次登记（会共享同一份说明）。"""
     item = {"desc": desc, "usage": list(usage or []), "feature": feature, "group": group}
+    # 主名必登记；别名同样登记（共享同一份说明），这样 /help B50 也能查到，
+    # 而且 _command_map 会把它们当成「已知命令」，不会被当成别家 bot 的卡片丢掉。
     for cmd in cmds:
         if cmd:
             _DESCRIPTIONS[str(cmd).strip().lstrip("/").lower()] = item
@@ -102,6 +104,22 @@ def _command_map() -> dict[str, str]:
         for name in names:
             mapping.setdefault(name.lower(), plugin_name)
     return mapping
+
+
+def _aliases() -> dict[str, str]:
+    """别名（小写）-> 主命令名。``/B50 help``、``/help b50`` 这类也要能查。"""
+    out: dict[str, str] = {}
+    try:
+        from .catalog import CATALOG
+    except Exception:  # noqa: BLE001
+        return out
+    for cmds, _desc, _usage, _feature, _group in CATALOG:
+        if not cmds:
+            continue
+        main = str(cmds[0]).lower()
+        for alias in cmds[1:]:
+            out.setdefault(str(alias).lower(), main)
+    return out
 
 
 # ---------------------------------------------------------------- 功能开关对接
@@ -243,10 +261,16 @@ def _overview() -> str:
             if name not in groups[group]:
                 groups[group].append(name)
 
-    # 有说明的分组优先（更可能是用户日常用的），再按数量排
+    # 有说明的分组优先（更可能是用户日常用的），再按数量排；
+    # 帮助本身永远排最后 —— 排在中间点进去也还是自己。
     ordered = sorted(
         groups.items(),
-        key=lambda kv: (0 if any(_DESCRIPTIONS.get(n.lower()) for n in kv[1]) else 1, -len(kv[1]), kv[0]),
+        key=lambda kv: (
+            1 if kv[0] == "帮助" else 0,
+            0 if any(_DESCRIPTIONS.get(n.lower()) for n in kv[1]) else 1,
+            -len(kv[1]),
+            kv[0],
+        ),
     )
     lines = ["📖 命令总览", "────────────"]
     total = 0
@@ -257,7 +281,7 @@ def _overview() -> str:
         more = f" 等 {len(names)} 个" if len(names) > len(shown) else ""
         lines.append(f"{group}：{'、'.join(_prefix() + n for n in shown)}{more}")
     lines.append("────────────")
-    lines.append(f"共 {total} 个命令")
+    lines.append(f"共 {total} 个命令（有的插件很短，只显示前几个；/help <命令> 看详情）")
     lines.append("看详情：<命令> help 或 help <命令>")
     return "\n".join(lines)
 
@@ -291,7 +315,7 @@ async def handle_help(msg: Message = EventMessage(), arg: Message = CommandArg()
 
     # help <命令> / help <功能>
     key = word.lstrip("/").lower()
-    if key in _command_map():
+    if key in _command_map() or key in _aliases():
         await help_cmd.finish(_cmd_help_text(word))
     feature = _find_feature(word)
     if feature is not None:
@@ -349,7 +373,7 @@ async def handle_single(msg: Message = EventMessage()) -> None:
     m = _HELP_TAIL_RE.match(text)
     if m:
         word = m.group("word").strip()
-        if word.lower() in _command_map():
+        if word.lstrip("/").lower() in _command_map() or word.lstrip("/").lower() in _aliases():
             await _help_msg.finish(_cmd_help_text(word))
         feature = _find_feature(word)
         if feature is not None:
@@ -359,7 +383,7 @@ async def handle_single(msg: Message = EventMessage()) -> None:
     m = _HELP_HEAD_RE.match(text)
     if m:
         word = m.group("word").strip()
-        if word.lower() in _command_map():
+        if word.lstrip("/").lower() in _command_map() or word.lstrip("/").lower() in _aliases():
             await _help_msg.finish(_cmd_help_text(word))
         feature = _find_feature(word)
         if feature is not None:
