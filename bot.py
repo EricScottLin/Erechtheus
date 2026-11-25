@@ -66,8 +66,10 @@ nonebot.load_plugin(Path("plugins/qqbot_core"))
 # 签到金币 + 捕鱼（玩法层，通过 require("qqbot_core") 调用货币接口）
 nonebot.load_plugin(Path("plugins/qqbot_economy"))
 
-# 图片帮助菜单：/help、/帮助、/菜单（依赖 localstore / alconna / htmlrender）
-nonebot.load_plugin("nonebot_plugin_picmenu_next")
+# 图片帮助菜单由 plugins/qqbot_help 负责（在文件末尾加载，需要先采集全部命令）。
+# 2026-11-25 起不再加载 nonebot_plugin_picmenu_next：它和 qqbot_help 抢
+# 「/help」「/帮助」「/菜单」三个入口，而且依赖 nonebot_plugin_alconna，
+# 容器内实际加载失败，只会造成两套菜单随机回。
 
 # 4. 第三方插件
 nonebot.load_plugin("nonebot_plugin_maimaidx")
@@ -97,6 +99,15 @@ nonebot.load_plugin(Path("plugins/qqbot_todo"))
 # + ChatBridge）。源码来自 vendor/MaimaiDXCHN（只读挂载 /opt/maimai-dx-chn +
 # PYTHONPATH）。默认 demo 模式，不请求游戏服；只处理私聊，只对 bot 主与白名单开放。
 nonebot.load_plugin(Path("plugins/qqbot_maimai_dx"))
+
+# DJMAX Respect V 查分：B100 / 分表 / 单曲信息 / 单曲成绩（V-Archive）。
+# 数据缓存在 localstore 的插件数据目录（插件目录是只读挂载）；
+# 出图用的字体与素材随插件一起放在 plugins/qqbot_djmax/djmax_bests/generators。
+nonebot.load_plugin(Path("plugins/qqbot_djmax"))
+
+# 统一帮助：/help 看总览、<命令> help 看详情、单独发功能名给说明。
+# 必须在最后加载（要采集全部已加载插件的命令）；说明表见 plugins/qqbot_help/catalog.py。
+nonebot.load_plugin(Path("plugins/qqbot_help"))
 
 # 5. 启动
 nonebot.run()

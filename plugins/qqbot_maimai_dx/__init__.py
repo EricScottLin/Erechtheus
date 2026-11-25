@@ -45,7 +45,7 @@ from nonebot.log import logger
 from nonebot.plugin import PluginMetadata
 from nonebot.rule import Rule
 
-from . import card, image, prices, qr, scorecard
+from . import card, features, image, prices, qr, scorecard
 from .config import Config
 
 __plugin_meta__ = PluginMetadata(
@@ -101,8 +101,23 @@ def _group_ids() -> frozenset[int]:
 
 
 def _in_group(event: MessageEvent) -> bool:
-    """只在指定群里响应；其他群 matcher 根本不匹配，一个字都不回。"""
-    return isinstance(event, GroupMessageEvent) and event.group_id in _group_ids()
+    """只在指定群、且本群开着「科技」时响应；否则 matcher 根本不匹配。"""
+    return (
+        isinstance(event, GroupMessageEvent)
+        and event.group_id in _group_ids()
+        and features.is_enabled(event.group_id)
+    )
+
+
+def help_visible(group_id: int | None) -> bool:
+    """帮助菜单用：本群能不能用「科技」（开通范围 + 本群开关两层都满足）。"""
+    if group_id is None:
+        return False
+    try:
+        gid = int(group_id)
+    except (TypeError, ValueError):
+        return False
+    return gid in _group_ids() and features.is_enabled(gid)
 
 
 def _in_private(event: MessageEvent) -> bool:
@@ -754,33 +769,39 @@ try:
     hp = get_plugin("qqbot_help")
     if hp is not None:
         hp.module.describe(
-            "说明", desc="舞萌直连说明与收费（/说明）",
-            usage=["/说明"], group="舞萌",
+            "说明", desc="命令说明与收费",
+            usage=["/说明"], group="科技",
         )
         hp.module.describe(
-            "大象信息", desc="玩家资料 + 本地状态（免费，群里/私聊都行）",
-            usage=["/大象信息"], group="舞萌",
+            "大象信息", desc="查看个人资料与当前状态（免费）",
+            usage=["/大象信息"], group="科技",
         )
         hp.module.describe(
             "更新成绩", "更新b50", "更新B50", "B50", "b50",
-            desc="读取最新成绩并出成绩图（约 1 分钟）",
-            usage=["/更新成绩"], group="舞萌",
+            desc="生成最新成绩图（约 1 分钟，10 月币）",
+            usage=["/更新成绩"], group="科技",
         )
         hp.module.describe(
-            "导出", "导出成绩", desc="导出成绩 JSON 与 CSV", usage=["/导出"], group="舞萌",
+            "导出", "导出成绩", desc="导出成绩文件（仅私聊，10 月币）",
+            usage=["/导出"], group="科技",
         )
         hp.module.describe(
-            "登出", desc="独立登出并核验远端状态", usage=["/登出"], group="舞萌",
+            "登出", desc="登出状态", usage=["/登出"], group="科技",
         )
         hp.module.describe(
-            "识图", desc="识别成绩结算图并存本地档案", usage=["/识图（和图发在同一条）"], group="舞萌",
+            "识图", desc="识别成绩截图并保存",
+            usage=["/识图（和图发在同一条）"], group="科技",
         )
         hp.module.describe(
-            "绑定", desc="私聊绑定舞萌账号", usage=["私聊发 /绑定 并附二维码图"], group="舞萌",
+            "绑定", desc="私聊发送二维码图完成绑定（100 月币）",
+            usage=["私聊发 /绑定 并附二维码图"], group="科技",
         )
         hp.module.describe(
-            "解绑", desc="解绑舞萌账号（管理员协助；满级可自助）",
-            usage=["/解绑 @某人"], group="舞萌",
+            "解绑", desc="解除当前绑定账号",
+            usage=["/解绑 @某人"], group="科技",
         )
 except Exception as exc:  # noqa: BLE001 —— 帮助登记是锦上添花，不能拖垮插件
     logger.warning(f"[qqbot_maimai_dx] 帮助登记失败：{type(exc).__name__}: {exc}")
+
+# 注册按群功能开关「科技」（qqbot_group 晚于本插件加载时，is_enabled 会补注册）
+features.ensure_registered()

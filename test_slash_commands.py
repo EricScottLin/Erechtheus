@@ -120,9 +120,13 @@ def _maimai_module():
     imports += "from nonebot import get_driver\n"
     aliases = src[src.index("_GROUP_ALIASES = {"):src.index("def _plain(event")]
     rules = src[src.index("def _plain(event"):src.index("def _bot_settings()")]
+    from types import SimpleNamespace as _NS
+
     ns: dict = {
         "__name__": "qqbot_maimai_dx_probe",
         "logger": __import__("nonebot.log", fromlist=["logger"]).logger,
+        # 插件里 _in_group 现在还要看按群开关「科技」，这里给个恒开的桩
+        "features": _NS(is_enabled=lambda group_id, default=True: True),
     }
     exec(imports, ns)  # noqa: S102
     exec("from types import SimpleNamespace\n"
@@ -211,9 +215,9 @@ def test_help() -> None:
     check("/help 总览「帮助」分组排最后", lines[-4].startswith("帮助："), lines[-5:])
     # 线上／容器里会在启动时把舞萌命令「注册成真正的命令」（见 qqbot_maimai_dx 末尾的
     # 帮助登记）；工作区里没有 maimai_chn 依赖，插件没加载，这里模拟那次登记。
-    mod.describe("大象信息", desc="玩家资料 + 本地状态", usage=["/大象信息"], group="舞萌")
+    mod.describe("大象信息", desc="查看个人资料与当前状态（免费）", usage=["/大象信息"], group="科技")
     mod.describe("更新成绩", "更新b50", "更新B50", "B50", "b50",
-                 desc="读取最新成绩并出成绩图", usage=["/更新成绩"], group="舞萌")
+                 desc="生成最新成绩图（约 1 分钟，10 月币）", usage=["/更新成绩"], group="科技")
     # 线上启动时登记进 qqbot_help 的舞萌命令必须能被 /help 查到；纠错表
     # (qqbot_ai.typo) 只收「真正注册成命令」的 matcher，舞萌插件的规则不是
     # command matcher，所以在纠错表里查不到、也无需查——这里只断言 /help 一侧。
@@ -224,7 +228,7 @@ def test_help() -> None:
     check("裸「大象信息」不是 help 里的功能名", mod._find_feature("大象信息") is None)  # noqa: SLF001
     check("B50 是已知别名", "b50" in mod._aliases(), "")  # noqa: SLF001
     detail = mod._cmd_help_text("/大象信息")  # noqa: SLF001
-    check("/help 大象信息 有说明", "玩家资料" in detail, detail)
+    check("/help 大象信息 有说明", "个人资料" in detail, detail)
     detail = mod._cmd_help_text("B50")  # noqa: SLF001
     check("/B50 help 复用更新成绩说明", "成绩" in detail, detail)
 

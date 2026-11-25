@@ -18,13 +18,16 @@
 from __future__ import annotations
 
 import re
+import sys
 
 import nonebot
 from nonebot import on_command, on_message
-from nonebot.adapters.onebot.v11 import Message, MessageEvent
+from nonebot.adapters.onebot.v11 import Message, MessageEvent, MessageSegment
 from nonebot.log import logger
 from nonebot.params import CommandArg, EventMessage
 from nonebot.rule import Rule
+
+from . import menu, render
 
 # 这里不能 import qqbot_group（插件目录独立），用运行时查找，缺失就退化
 # ---------------------------------------------------------------- 说明登记表
@@ -130,11 +133,32 @@ def _feature_registry():
     return getattr(plugin.module, "features", None)
 
 
+def _ensure_feature_registrations() -> None:
+    """让各业务插件的 ``features.ensure_registered()`` 跑一遍。
+
+    qqbot_lyric / qqbot_todo / qqbot_roast 这些插件是惰性注册开关的：只有自己的
+    命令被调用时才注册。帮助要按开关过滤，得先把它们都注册齐，否则「本群关掉的
+    歌词接龙」会照样出现在总览里。
+    """
+    for plugin in nonebot.get_loaded_plugins():
+        module = getattr(plugin, "module", None)
+        name = getattr(module, "__name__", "") if module is not None else ""
+        if not name:
+            continue
+        ensure = getattr(sys.modules.get(f"{name}.features"), "ensure_registered", None)
+        if callable(ensure):
+            try:
+                ensure()
+            except Exception as exc:  # noqa: BLE001
+                logger.debug(f"[qqbot_help] {name} 注册开关失败：{exc}")
+
+
 def _all_features() -> list:
     registry = _feature_registry()
     if registry is None:
         return []
     try:
+        _ensure_feature_registrations()
         registry.sync_external_features()
         return [registry._REGISTRY[k] for k in registry._ORDER]  # noqa: SLF001
     except Exception:  # noqa: BLE001
@@ -160,9 +184,136 @@ def _feature_enabled(event: MessageEvent, key: str) -> bool | None:
     if registry is None or group_id is None:
         return None
     try:
+        _ensure_feature_registrations()
         return bool(registry.is_enabled(int(group_id), key))
     except Exception:  # noqa: BLE001
         return None
+
+
+# ---------------------------------------------------------------- 图片菜单
+# 总览/详情都是现场画的 PNG：本群开关不同、群不同，图就不一样，所以按
+# (群号, 可见功能) 缓存少量结果，避免同一条 /help 反复渲染。
+_OVERVIEW_CACHE: dict[tuple, bytes] = {}
+_DETAIL_CACHE: dict[tuple, bytes] = {}
+
+
+def _maimai_dx_open(group_id: int) -> bool:
+    """科技是否对本群开放（插件没加载就当作未开放）。"""
+    plugin = nonebot.get_plugin("qqbot_maimai_dx")
+    check = getattr(plugin.module, "help_visible", None) if plugin is not None else None
+    if check is None:
+        return False
+    try:
+        return bool(check(int(group_id)))
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _feature_visible(event: MessageEvent, feature: menu.Feature) -> bool:
+    """这个功能在当前群/私聊里该不该出现在帮助里。"""
+    group_id = getattr(event, "group_id", None)
+    if group_id is None:
+        # 私聊没有群上下文：只展示不依赖开通范围的功能
+        return not feature.gate
+    if feature.gate == "maimai_dx" and not _maimai_dx_open(group_id):
+        return False
+    if feature.switch and _feature_enabled(event, feature.switch) is False:
+        return False
+    return True
+
+
+def _switch_label(feature: menu.Feature) -> str | None:
+    """详情页顶部的开关标签；没有开关返回 None。"""
+    if not feature.switch:
+        return None
+    registered = next((f for f in _all_features() if f.key == feature.switch), None)
+    return registered.name if registered is not None else feature.name
+
+
+def _hidden_reason(event: MessageEvent, feature: menu.Feature) -> str:
+    if feature.gate == "maimai_dx":
+        if getattr(event, "group_id", None) is None:
+            return f"「{feature.name}」现在用不了。"
+        return f"本群没有「{feature.name}」这个功能。"
+    label = _switch_label(feature) or feature.name
+    return f"本群没开「{feature.name}」，找群管发 /开启 {label}。"
+
+
+def _visible_features(event: MessageEvent) -> list[menu.Feature]:
+    return [f for f in menu.FEATURES if _feature_visible(event, f)]
+
+
+def _overview_image(event: MessageEvent) -> bytes | None:
+    """总览图；字体缺失或渲染失败时返回 None，调用方退回文字。"""
+    if not render.available():
+        return None
+    visible = _visible_features(event)
+    group_id = getattr(event, "group_id", None)
+    key = (group_id, tuple(f.name for f in visible))
+    cached = _OVERVIEW_CACHE.get(key)
+    if cached is not None:
+        return cached
+    blocks: list[tuple[str, list[tuple[str, tuple[str, ...]]]]] = []
+    for block_name, _color in menu.BLOCKS:
+        rows = [(f.name, f.overview) for f in visible if f.block == block_name]
+        if rows:
+            blocks.append((block_name, rows))
+    if not blocks:
+        return None
+    if group_id is None:
+        footer = f"共 {len(visible)} 个功能 · 发 /help 功能名 看详情"
+    else:
+        footer = f"本群已开启 {len(visible)} 个功能 · 发 /本群功能 查看全部开关"
+    try:
+        png = render.render_overview(blocks, footer)
+    except Exception as exc:  # noqa: BLE001 —— 出图失败不能拖垮帮助
+        logger.warning(f"[qqbot_help] 总览出图失败：{type(exc).__name__}: {exc}")
+        return None
+    if len(_OVERVIEW_CACHE) > 24:
+        _OVERVIEW_CACHE.clear()
+    _OVERVIEW_CACHE[key] = png
+    return png
+
+
+def _detail_tag(feature: menu.Feature) -> str | None:
+    """详情页顶部的状态标签；科技这类不暴露控制方式，返回 None。"""
+    if feature.gate:
+        return None
+    label = _switch_label(feature)
+    if label is None:
+        return "本群未受开关控制 · 常开"
+    return f"受 /开启 {label} 控制"
+
+
+def _detail_image(feature: menu.Feature) -> bytes | None:
+    tag = _detail_tag(feature)
+    key = (feature.name, tag)
+    cached = _DETAIL_CACHE.get(key)
+    if cached is not None:
+        return cached
+    try:
+        png = render.render_detail(feature, tag=tag)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"[qqbot_help] 详情出图失败：{type(exc).__name__}: {exc}")
+        return None
+    if len(_DETAIL_CACHE) > 64:
+        _DETAIL_CACHE.clear()
+    _DETAIL_CACHE[key] = png
+    return png
+
+
+async def _finish_page(matcher, event: MessageEvent, word: str) -> bool:
+    """word 命中功能页就发图；返回 False 表示没命中、交给后面的文字逻辑。"""
+    feature = menu.find_feature(word) or menu.find_by_command(word)
+    if feature is None:
+        return False
+    if not _feature_visible(event, feature):
+        await matcher.finish(_hidden_reason(event, feature))
+    png = _detail_image(feature)
+    if png is None:
+        return False
+    await matcher.finish(MessageSegment.image(png))
+    return True
 
 
 # ---------------------------------------------------------------- 渲染
@@ -244,7 +395,7 @@ _PLUGIN_LABELS = {
     "nonebot_plugin_rollpig_plus": "抽猪",
     "nonebot_plugin_bilibili": "视频",
     "nonebot_plugin_maimaidx": "舞萌",
-    "qqbot_maimai_dx": "舞萌",
+    "qqbot_maimai_dx": "科技",
     "qqbot_djmax": "DJMAX",
     "nonebot_plugin_nbnhhsh": "缩写",
 }
@@ -303,7 +454,11 @@ def _clip(text: str, limit: int = 40) -> str:
 
 
 @help_cmd.handle()
-async def handle_help(msg: Message = EventMessage(), arg: Message = CommandArg()) -> None:
+async def handle_help(
+    event: MessageEvent,
+    msg: Message = EventMessage(),
+    arg: Message = CommandArg(),
+) -> None:
     # 「菜单 xxx」：xxx 不像命令/功能名就直接退出，一个字都不回。
     # 这些是别家 bot 的菜单卡片（多行、带 |），回「没找到…」等于把卡片原样回显。
     if not _help_query_ok(msg):
@@ -311,9 +466,15 @@ async def handle_help(msg: Message = EventMessage(), arg: Message = CommandArg()
         return
     word = arg.extract_plain_text().strip()
     if not word:
+        png = _overview_image(event)
+        if png is not None:
+            await help_cmd.finish(MessageSegment.image(png))
         await help_cmd.finish(_overview())
 
-    # help <命令> / help <功能>
+    # help <功能> 出详情图；help <命令> 若属于某个功能，也出该功能的详情图
+    await _finish_page(help_cmd, event, word)
+
+    # help <命令>
     key = word.lstrip("/").lower()
     if key in _command_map() or key in _aliases():
         await help_cmd.finish(_cmd_help_text(word))
@@ -367,12 +528,13 @@ _help_msg = on_message(rule=_help_rule, priority=4, block=True)
 
 
 @_help_msg.handle()
-async def handle_single(msg: Message = EventMessage()) -> None:
+async def handle_single(event: MessageEvent, msg: Message = EventMessage()) -> None:
     text = _strip_prefix(msg.extract_plain_text().strip())
 
     m = _HELP_TAIL_RE.match(text)
     if m:
         word = m.group("word").strip()
+        await _finish_page(_help_msg, event, word)
         if word.lstrip("/").lower() in _command_map() or word.lstrip("/").lower() in _aliases():
             await _help_msg.finish(_cmd_help_text(word))
         feature = _find_feature(word)
@@ -383,6 +545,7 @@ async def handle_single(msg: Message = EventMessage()) -> None:
     m = _HELP_HEAD_RE.match(text)
     if m:
         word = m.group("word").strip()
+        await _finish_page(_help_msg, event, word)
         if word.lstrip("/").lower() in _command_map() or word.lstrip("/").lower() in _aliases():
             await _help_msg.finish(_cmd_help_text(word))
         feature = _find_feature(word)
@@ -391,6 +554,7 @@ async def handle_single(msg: Message = EventMessage()) -> None:
         await _help_msg.finish(f"没找到「{_clip(word)}」。发 /help 看全部命令。")
 
     # 单独词：功能详情
+    await _finish_page(_help_msg, event, text)
     feature = _find_feature(text)
     if feature is not None:
         await _help_msg.finish(_feature_help_text(feature))
@@ -408,7 +572,7 @@ def _should_help_single(word: str) -> bool:
     if not key:
         return False
     is_command = key in _command_map()
-    feature = _find_feature(word)
+    feature = _find_feature(word) or menu.find_feature(word)
     if feature is None:
         return False
     # 命令同时也是功能名时（如「表情」），让它执行，不接管
@@ -470,13 +634,18 @@ def _looks_like_help_query(raw: str) -> bool:
         return True  # 裸命令词，出总览
     query = " ".join(words[1:]).strip()
     key = query.lower()
-    if key in _command_map() or _find_feature(query) is not None:
+    if key in _command_map() or _find_feature(query) is not None or _menu_hit(query):
         return True
     # 空格插入的写法（「今 日 猪 猪」）：去空后再比一次
     squeezed = re.sub(r"\s+", "", key)
     if squeezed and squeezed != key:
-        return squeezed in _command_map() or _find_feature(squeezed) is not None
+        return squeezed in _command_map() or _find_feature(squeezed) is not None or _menu_hit(squeezed)
     return False
+
+
+def _menu_hit(word: str) -> bool:
+    """是不是图片菜单里的功能名或命令。"""
+    return menu.find_feature(word) is not None or menu.find_by_command(word) is not None
 
 
 def _help_query_ok(msg: Message) -> bool:
