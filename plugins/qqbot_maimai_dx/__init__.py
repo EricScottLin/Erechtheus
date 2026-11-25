@@ -430,15 +430,22 @@ async def _run_group(matcher, bot: Bot, event: MessageEvent, name: str, text: st
         # 上游成功文案在教用户发「确认上传」；该功能已移除，换成我们自己的摘要 + 成绩图
         data = reply.data or {}
         count = data.get("count")
+        utage = data.get("utage_count") or 0
+        skipped = len(data.get("issues") or [])
         scores = (data.get("payload") or {}).get("scores") or []
         png = card.render(scores, count=count, simulated=reply.simulated)
+        notes = ""
+        if utage:
+            notes += f"（含宴会场 {utage} 条）"
+        if skipped:
+            notes += f"；另有 {skipped} 条暂不支持，已跳过"
         if png:
             await matcher.send(MessageSegment.image(png))
-            text = f"共 {count} 条" if count is not None else "已读取最新成绩"
+            text = (f"共 {count} 条" if count is not None else "已读取最新成绩") + notes
             if reply.simulated:
                 text += "（演示数据，未连接游戏）"
         else:
-            text = "📥 已读取最新成绩并登出" + (f"，共 {count} 条" if count is not None else "")
+            text = "📥 已读取最新成绩并登出" + (f"，共 {count} 条" if count is not None else "") + notes
         await matcher.finish(text + ("\n" + extra if extra else ""))
     await _deliver(matcher, bot, event, reply, extra)
 
