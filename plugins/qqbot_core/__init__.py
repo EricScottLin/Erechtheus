@@ -56,6 +56,7 @@ from .config import Config
 from .currency import (
     CURRENCIES,
     MAX_LEVEL,
+    MILEAGE_PER_LEVEL,
     cumulative_mileage,
     fmt,
     get_currency,
@@ -73,6 +74,7 @@ __plugin_meta__ = PluginMetadata(
     description="货币（月币/荣耀）与个人信息基础服务，供其他插件解耦调用",
     usage="""\
 /余额             查看钱包与荣耀等级
+/爆荣耀 @人 30级  给账号发荣耀（bot 主，1 级 = 1000 荣耀）
 /名片             查看个人信息卡
 /称号             查看荣耀称号与折扣
 /升阶             达到觉醒点时升阶（★+1，有奖励）
@@ -508,6 +510,80 @@ async def _(event: MessageEvent, arg: Message = CommandArg()):
     )
     await grant_cmd.finish(
         _reply_prefix(event) + f"✅ 已向 {target} 发放 {fmt('drachma', amount)}"
+    )
+
+
+# ---------------------------------------------------------------- /爆荣耀
+kleos_grant = on_command(
+    "爆荣耀", aliases={"赐荣耀", "升荣耀", "给荣耀"}, priority=5, block=True
+)
+
+
+def _parse_kleos_amount(text: str) -> tuple[str, int] | None:
+    """解析荣耀参数，返回 (模式, 数值)。
+
+    "5000" → ("add", 5000)        直接加 5000 荣耀
+    "30级"  → ("add", 30000)      加 30 级（1 级 = 1000 荣耀）
+    "到30级" → ("set", 30)         把等级设成 30（只升不降）
+    """
+    text = text.strip()
+    if not text:
+        return None
+    if text.startswith("到") and text.endswith("级"):
+        core = text[1:-1]
+        return ("set", int(core)) if core.isdigit() else None
+    if text.endswith("级"):
+        core = text[:-1]
+        return ("add", int(core) * MILEAGE_PER_LEVEL) if core.isdigit() else None
+    return ("add", int(text)) if text.isdigit() else None
+
+
+@kleos_grant.handle()
+async def _(event: MessageEvent, arg: Message = CommandArg()):
+    if not _can_grant(event):
+        await kleos_grant.finish("无权使用该命令")
+
+    target, amount_text = _parse_grant_args(arg)
+    if target is None:
+        await kleos_grant.finish(
+            "用法：/爆荣耀 <@某人|QQ号> [数量|N级|到N级]，默认 1000（1 级）"
+        )
+    parsed = _parse_kleos_amount(amount_text) if amount_text else ("add", MILEAGE_PER_LEVEL)
+    if parsed is None:
+        await kleos_grant.finish("数量写成 5000、30级 或 到30级")
+    mode, value = parsed
+    if value <= 0:
+        await kleos_grant.finish("数量必须大于 0")
+
+    status = await awaken.status(target)
+    if mode == "set":
+        if value > MAX_LEVEL:
+            await kleos_grant.finish(f"等级最高 {MAX_LEVEL}")
+        target_total = cumulative_mileage(value)
+        if target_total <= status["total"]:
+            await kleos_grant.finish(
+                f"{target} 已经是 {status['raw_level']} 级（累计 {status['total']:,} 荣耀），"
+                "不低于目标，未改动"
+            )
+        delta = target_total - status["total"]
+        mode_text = f"设到 {value} 级"
+    else:
+        if value > MAX_LEVEL * MILEAGE_PER_LEVEL:
+            await kleos_grant.finish(f"一次最多 {MAX_LEVEL * MILEAGE_PER_LEVEL:,} 荣耀")
+        delta = value
+        mode_text = f"增加 {value:,} 荣耀"
+
+    await wallet.earn(
+        target, "kleos", delta, source=f"grant by {event.get_user_id()}"
+    )
+    after = await awaken.status(target)
+    tip = ""
+    if after["level"] < after["raw_level"]:
+        tip = f"\n⚠️ 生效等级卡在 Lv.{after['level']}，让 TA 发 /升阶 才能继续升级"
+    await kleos_grant.finish(
+        _reply_prefix(event)
+        + f"✅ 已给 {target} {mode_text}（共 {after['total']:,} 荣耀 · "
+        f"Lv.{after['raw_level']}）{tip}"
     )
 
 
