@@ -12,6 +12,7 @@ from nonebot.adapters.onebot.v11 import (
 )
 from nonebot.params import CommandArg
 
+from . import features
 from .config import plugin_config
 from .helpers import (
     arg_text_without_target,
@@ -42,6 +43,9 @@ async def handle_smoke(
     bot: Bot, event: GroupMessageEvent, arg: Message = CommandArg()
 ) -> None:
     """随机禁言：对目标执行一段 8 小时以内的随机时长禁言。"""
+    if not features.is_enabled(event.group_id, "smoke"):
+        await smoke.finish("本群的「抽烟（随机禁言）」功能被管理员关闭了。")
+
     denial = await check_admin(bot, event)
     if denial:
         await finish_denial(smoke, bot, event, denial)

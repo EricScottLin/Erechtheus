@@ -266,6 +266,21 @@ async def e2e() -> None:
         and any(s.type == "at" and s.data.get("qq") == str(TARGET) for s in sent),
     )
 
+    # --- 群开关：smoke 关闭 -> 拒绝并提示 ---
+    feats = nonebot.get_plugin("qqbot_group").module.features
+    _orig = feats.is_enabled
+    feats.is_enabled = lambda gid, key: False if key == "smoke" else _orig(gid, key)
+    try:
+        bot = new_bot("admin")
+        await run(bot, make_event(smoke_msg(), role="admin"))
+        check("/烟: 群开关关闭时拒绝", "被管理员关闭" in reply_text(bot), reply_text(bot))
+        check("/烟: 开关关闭时不调用 set_group_ban", api_call(bot, "set_group_ban") is None)
+        bot = new_bot("admin")
+        await run(bot, make_event("/禁言 10002 10m", role="admin"))
+        check("/禁言: 不受 smoke 开关影响", api_call(bot, "set_group_ban") is not None)
+    finally:
+        feats.is_enabled = _orig
+
     # --- 核心：bot 不是管理员 -> 拒绝 ---
     bot = new_bot("member")
     await run(bot, make_event(smoke_msg(), role="admin"))
