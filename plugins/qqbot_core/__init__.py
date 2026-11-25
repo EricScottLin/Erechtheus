@@ -515,7 +515,10 @@ async def _(event: MessageEvent, arg: Message = CommandArg()):
 
 # ---------------------------------------------------------------- /爆荣耀
 kleos_grant = on_command(
-    "爆荣耀", aliases={"赐荣耀", "升荣耀", "给荣耀"}, priority=5, block=True
+    "爆荣耀",
+    aliases={"赐荣耀", "升荣耀", "给荣耀", "升级", "晋升"},
+    priority=5,
+    block=True,
 )
 
 
