@@ -192,6 +192,12 @@ def test_ai_wake() -> None:
     check("「/大象信息」不会被小e 接走", not wake("/大象信息"))
     check("「/pigng」不会被小e 接走", not wake("/pigng"))
 
+    def wake_private(text: str) -> bool:
+        return _LOOP.run_until_complete(ai._wake_rule(make_private(text)))  # noqa: SLF001
+
+    ai._cooldown.clear()  # noqa: SLF001 —— 冷却按用户计，前面几条已经用掉
+    check("私聊「/小e 你好」仍能唤醒（手机输入法常见）", wake_private("/小e 你好"))
+
 
 def test_help() -> None:
     load_plugin("qqbot_help")

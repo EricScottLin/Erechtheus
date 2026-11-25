@@ -439,7 +439,8 @@ async def _wake_rule(event: MessageEvent) -> bool:
     # 「/小e 问题」这类是命令写法不是唤醒词。而且 COMMAND_START 含空串时，
     # 带 / 的消息会先被别的插件的命令规则接走，小e 再去接就等于抢答
     # （2026-11-25 群里发 /大象信息，同一刻还有一条聊天被当成绩回答了）。
-    if _starts_with_command_prefix(event):
+    # 私聊没有这种抢答，而手机输入法常用「/」开头分行，所以私聊放行。
+    if not isinstance(event, PrivateMessageEvent) and _starts_with_command_prefix(event):
         return False
     # 「@别人 小e 帮我看看」是在跟别人说话：除非同时 @ 了 bot，否则不接话
     if _at_others(event) and not (hasattr(event, "is_tome") and event.is_tome()):
